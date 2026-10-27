@@ -1,0 +1,206 @@
+---
+title: "Gateway: Measurement Collection and Anonymized Publication"
+sidebarTitle: "Gateway"
+description: "Reference for the Gateway class — manages smart meter connections, participates in ring coordination, collects measurements into Counting Bloom Filters, and publishes z-anonymous tuples."
+---
+
+The `Gateway` class represents a single smart metering gateway node in the deZent network. Each gateway sits between one or more `SmartMeter` instances and the `CentralEntity`, acting as the primary data-collection point in all three simulation scenarios. In the decentralized scenario a gateway can serve as the round coordinator — adding noise to the Counting Bloom Filter, triggering ring traversal, and enforcing z-anonymity — while in every scenario it participates in measurement collection and, once z is satisfied, in publishing anonymized tuples to the CE. Gateways are linked into a sorted doubly-linked ring via their `gw_pred` and `gw_suc` references.
+
+## Constructor
+
+```python
+class Gateway:
+    def __init__(
+        self,
+        ce: CentralEntity,
+        id: int | None = None,
+        n_sm_conn: int = 0,
+    ) -> None
+```
+
+<ParamField path="ce" type="CentralEntity" required>
+  Reference to the Central Entity shared by all gateways in the network. Used to forward published tuples and to record simulation log entries.
+</ParamField>
+
+<ParamField path="id" type="int | None">
+  Unique integer identifier for this gateway within the network's ID space. Assigned by `Network.open_gws`; defaults to `None` when constructing manually.
+</ParamField>
+
+<ParamField path="n_sm_conn" type="int">
+  Number of smart meter connections allocated to this gateway. Determines how many `SmartMeter` instances are created in `connect_gw_to_sm`. Defaults to `0`.
+</ParamField>
+
+### Instance Attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `ce` | `CentralEntity` | Back-reference to the shared Central Entity. |
+| `id` | `int` \| `None` | Gateway's unique ID in the network ring. |
+| `gw_pred` | `Gateway` \| `None` | Ring predecessor; set by `Network.create_gw_ring`. |
+| `gw_suc` | `Gateway` \| `None` | Ring successor; set by `Network.create_gw_ring`. |
+| `n_sm_conn` | `int` | Number of smart meters connected to this gateway. |
+| `gw_type` | `str` | Gateway archetype; always `"standard"` in the current implementation. |
+| `profile_type` | `str` | Consumer profile region; always `"tk"` (Treptow-Köpenick, Berlin). |
+| `l_sms` | `dict[int, SmartMeter]` | Dictionary mapping SM integer ID to its `SmartMeter` instance; populated by `connect_gw_to_sm`. |
+| `record_log` | `RecordLog` | Local record log holding hashed measurement keys and their associated `RecordLogEntry` objects within the current `delta_t` window. |
+| `coord_noise` | `int` | Random noise integer (20–30) added to the CBF by a coordinating gateway; retained so it can be subtracted after ring traversal. |
+| `gw_ce_msg_cnt` | `int` | Counter for messages sent from this gateway to the CE; reset to 0 each time `get_gw_ce_msg_cnt` is called. |
+
+---
+
+## Setup
+
+### `connect_gw_to_sm`
+
+```python
+def connect_gw_to_sm(self) -> None
+```
+
+Populates `l_sms` with `n_sm_conn` freshly created `SmartMeter` instances. Internally, it builds a `ProfileDistribution` for the `"tk"` profile type and `"standard"` gateway type, then constructs each `SmartMeter` with that distribution and a sequential integer SM ID. Called by `Network.add_sms_to_gw` during initialization.
+
+---
+
+## Collection Methods
+
+### `add_initial_noise_to_cnt_struct`
+
+```python
+def add_initial_noise_to_cnt_struct(self, cnt_struct: CBloomFilter) -> CBloomFilter
+```
+
+Called by the **coordinating gateway** before the ring collection traversal begins. Draws a random integer `noise` in `[20, 30]`, stores it in `self.coord_noise`, and calls `cnt_struct.add(noise)`. This masks the coordinator's own measurement entries, preventing other gateways from inferring which values the coordinator observed.
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The freshly created Counting Bloom Filter for the current round.
+</ParamField>
+
+**Returns:** The same `CBloomFilter` with the noise value inserted.
+
+---
+
+### `remove_initial_noise_from_cnt_struct`
+
+```python
+def remove_initial_noise_from_cnt_struct(self, cnt_struct: CBloomFilter) -> CBloomFilter
+```
+
+Called by the coordinating gateway **after** the ring collection traversal completes, using the stored `self.coord_noise` value to call `cnt_struct.remove(self.coord_noise)`. Restores the CBF to its unmasked state so that z-enforcement and publication operate on real measurement counts.
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The CBF returned from `decent_collection_round`, still containing the noise item.
+</ParamField>
+
+**Returns:** The `CBloomFilter` with the noise value removed.
+
+---
+
+### `add_curr_measurement`
+
+```python
+def add_curr_measurement(self, cnt_struct: CBloomFilter, curr_time: datetime) -> CBloomFilter
+```
+
+Convenience wrapper used during ring traversal. First calls `collect_curr_measurement_from_sms` to poll all connected SMs and update `record_log`, then calls `cnt_struct.add_measurements(self.record_log.log)` to insert every currently held measurement key (repeated once per record) into the CBF.
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The shared CBF being passed around the ring.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Measurement timestamp forwarded to `collect_curr_measurement_from_sms`.
+</ParamField>
+
+**Returns:** The updated `CBloomFilter`.
+
+---
+
+### `collect_curr_measurement_from_sms`
+
+```python
+def collect_curr_measurement_from_sms(self, curr_time: datetime) -> None
+```
+
+Iterates over every SM in `l_sms`, calls `sm.measure_data(curr_time)` to obtain `(consumption_value, m_key)`, then:
+
+1. Adds the entry to `self.record_log` via `record_log.add_new_m_to_record_log`.
+2. Creates a `SimuLogEntry` and stores it in the CE's simulation log via `ce.store_tuple_in_simu_log`. This step is for analysis only and would not occur in a real deployment.
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  The current simulation wall-clock time; used as the measurement timestamp.
+</ParamField>
+
+---
+
+## Publication Methods
+
+### `get_curr_records_for_publishing`
+
+```python
+def get_curr_records_for_publishing(
+    self,
+    cnt_struct: CBloomFilter,
+    curr_time: datetime,
+) -> list[PubLogEntry]
+```
+
+Determines which of this gateway's locally recorded measurement keys are present in the z-enforced CBF and therefore eligible for publication. First calls `cnt_struct.existing_records(record_log.log.keys())` to filter keys that survive the CBF check, then calls `get_entries_w_current_timestamp` for each surviving key to restrict candidates to the current measurement round.
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The z-enforced CBF; only keys with a positive count here are considered for publication.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Only records with `log_entry.time == curr_time` and `is_published == False` are included.
+</ParamField>
+
+**Returns:** `list[PubLogEntry]` — the set of candidate tuples from this round that could be published.
+
+---
+
+### `get_entries_w_current_timestamp`
+
+```python
+def get_entries_w_current_timestamp(
+    self,
+    m_key: int,
+    curr_time: datetime,
+) -> list[PubLogEntry]
+```
+
+Scans `record_log.log[m_key]` for entries whose `time` equals `curr_time` and whose `is_published` flag is `False`. Returns each matching entry wrapped in a new `PubLogEntry`.
+
+<ParamField path="m_key" type="int" required>
+  The hashed measurement key to look up in the record log.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Timestamp filter; only entries from the current round are returned.
+</ParamField>
+
+**Returns:** `list[PubLogEntry]` — zero or more unpublished entries for `m_key` at `curr_time`.
+
+---
+
+### `publish_tuple`
+
+```python
+def publish_tuple(self, tuple: PubLogEntry) -> None
+```
+
+Forwards a single anonymized tuple to the Central Entity by calling `ce.publish_tuple(tuple)`, then increments `self.gw_ce_msg_cnt` by 1 to account for the GW→CE transmission.
+
+<ParamField path="tuple" type="PubLogEntry" required>
+  The publication log entry containing the hashed key, original measurement value, timestamp, SM ID, and consumer type.
+</ParamField>
+
+---
+
+### `get_gw_ce_msg_cnt`
+
+```python
+def get_gw_ce_msg_cnt(self) -> int
+```
+
+Returns the current value of `gw_ce_msg_cnt` and **resets it to 0**. Called by `zAnon` after each publication step to aggregate per-gateway message counts into the global `msg_cnt_gw_ce` counter.
+
+**Returns:** `int` — the number of GW→CE publish messages sent since the last call (or since construction).

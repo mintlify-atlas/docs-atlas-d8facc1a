@@ -1,0 +1,227 @@
+---
+title: "Three Anonymization Scenarios: deZent, Centralized, and Fully Decentralized"
+sidebarTitle: "Scenarios"
+description: "deZent runs three z-anonymity scenarios in one simulation: ring-coordinated deZent, centralized with a trusted CE, and fully decentralized with no inter-GW coordination."
+---
+
+A single `main.py` invocation runs **all three z-anonymity scenarios back-to-back**, sharing the same randomly generated network topology and using the same random seed throughout. Running the scenarios on identical network state makes results directly comparable: any difference in publication ratio or message overhead is attributable to the coordination strategy, not to network randomness. The simulation covers one full day (1,440 minutes = 96 measurement rounds) by default.
+
+<Tip>
+  deZent's goal is to match the publication quality of the centralized scenario while reducing the required trust in the central entity. The ring-based CBF exchange achieves multi-GW visibility into value frequencies without the CE ever seeing raw meter readings.
+</Tip>
+
+## Simulation Setup
+
+Before any scenario runs, `main.py` builds the shared network, then each scenario resets the log state using `clear_network_logs()`:
+
+```python
+# main.py
+params = get_user_input(n_gw, n_sm, z)
+num_gws, dist_num_sms, max_num_sm_at_gw, delta_t, zeta = params
+
+network = create_network(num_gws, dist_num_sms, max_num_sm_at_gw)
+start_timepoint = datetime.fromisoformat("2024-01-01")
+simu_runtime = 1440  # 1 day in minutes
+```
+
+Key fixed parameters:
+
+| Parameter | Default Value | Notes |
+|---|---|---|
+| `delta_t` | 121 minutes (7,260 s) | Anonymization window |
+| `simu_runtime` | 1,440 minutes | One simulated day |
+| Measurement frequency | 15 minutes | 96 rounds per day |
+| `dist_num_sms` | `"normal"` | Normal distribution of SMs per GW |
+
+---
+
+## Scenario 1 — deZent (`decent_zanon_w_comm`)
+
+The deZent scenario implements **decentralized z-anonymity with minimal ring coordination**. No central party ever sees the raw measurements; the CE only receives the final anonymized tuples.
+
+### How It Works
+
+<Steps>
+  <Step title="Coordinator initialization">
+    The first GW in `network.l_gws` is elected as the coordinating GW (`gw_coord`) for round 1. Coordination rotates to `gw_coord.gw_suc` after each round.
+  </Step>
+  <Step title="CBF creation and noise injection">
+    The coordinator creates a fresh Counting Bloom Filter sized for its connected SM count, then inserts a random noise element (`coord_noise = random.randint(20, 30)`) to obscure filter state from ring participants.
+
+    ```python
+    # zanon.py — decent_zanon_w_comm()
+    cnt_struct = z_utils.create_cnt_structure(
+        gw_coord.n_sm_conn, self.n_cycles_for_anon, self.cnt_struct_type
+    )
+    cnt_struct = gw_coord.add_initial_noise_to_cnt_struct(cnt_struct)
+    ```
+  </Step>
+  <Step title="Decentralized collection round">
+    Starting at `gw_coord.gw_suc`, the CBF traverses the entire ring clockwise. At each GW, stale records are evicted, fresh SM measurements are collected and hashed into the CBF, and the CBF is forwarded to the next GW.
+
+    ```python
+    cnt_struct = self.decent_collection_round(
+        gw_coord.gw_suc, gw_coord.id, cnt_struct, measurement_time
+    )
+    ```
+  </Step>
+  <Step title="Noise removal and z-threshold">
+    Back at the coordinator, the noise element is removed and the z-threshold is applied by subtracting `z − 1` from all CBF counters.
+
+    ```python
+    cnt_struct = gw_coord.remove_initial_noise_from_cnt_struct(cnt_struct)
+    cnt_struct = z_utils.ensure_min_cnt_z(cnt_struct, self.z)
+    ```
+  </Step>
+  <Step title="Decentralized publication round">
+    The filtered CBF traverses the ring a second time. Each GW checks its current-round records against the CBF and publishes matching tuples directly to the CE. Publication uses a random probability `p_pub` in the first pass (providing plausible deniability) and `p_pub = 100` in a second pass if any eligible tuples remain.
+  </Step>
+</Steps>
+
+### Output Files
+
+```
+decent_w_comm_zanon_z_<z>_dt_<delta_t_seconds>_nGw_<n>_distSm_<dist>_maxSm_<m>_seed_<s>.csv
+simu_log_decent_w_comm_zanon_z_...csv
+```
+
+Output CSVs include two header rows recording `msg_cnt_gwgw` and `msg_cnt_gw_ce` before the tuple data columns.
+
+---
+
+## Scenario 2 — Centralized (`cent_zanon_w_cnt_struct`)
+
+The centralized scenario is the **baseline reference implementation** that mirrors the Jha et al. approach. The CE acts as a trusted third party that collects all raw measurements, applies the z-threshold, and publishes the result. It uses a CBF for internal counting (for comparability with the deZent scenario) rather than a plain dictionary.
+
+### How It Works
+
+<Steps>
+  <Step title="CE triggers collection at each GW">
+    The CE iterates over all GWs and requests their current measurements. Each GW polls its SMs and returns the collected data.
+
+    ```python
+    # zanon.py — central_collection_round()
+    for gw in l_gws:
+        self.msg_cnt_gw_ce += 1  # trigger message CE → GW
+        gw.collect_curr_measurement_from_sms(curr_time)
+        self.msg_cnt_gwgw += (gw.n_sm_conn * 2)  # SM polling
+        n_added_m = ce.update_central_record_log(gw.record_log.log, curr_time)
+        self.msg_cnt_gw_ce += int(n_added_m)  # data transfer GW → CE
+    ```
+  </Step>
+  <Step title="Central z-threshold enforcement">
+    The CE counts occurrences of each measurement key across all GWs, then filters to keep only values with count `≥ z`:
+
+    ```python
+    # zanon_utils.py — central_ensure_min_cnt_z()
+    cnt_struct["tuple_count"] = cnt_struct["tuple_count"] - (z - 1)
+    valid_cnt_struct = cnt_struct.loc[cnt_struct["tuple_count"] > 0]
+    ```
+  </Step>
+  <Step title="Central publication round">
+    The CE publishes all eligible tuples with `p_pub = 100` — no probabilistic deniability is used at the central level.
+  </Step>
+</Steps>
+
+### Output Files
+
+```
+cent_w_comm_zanon_z_<z>_dt_<delta_t_seconds>_nGw_<n>_distSm_<dist>_maxSm_<m>_seed_<s>.csv
+simu_log_cent_w_comm_zanon_z_...csv
+```
+
+<Warning>
+  In the centralized scenario, the CE receives all raw measurement values from every GW before filtering. A compromised or malicious CE would have access to the complete, unanonymized data stream. This scenario is included as a reference benchmark, not as a recommended deployment architecture.
+</Warning>
+
+---
+
+## Scenario 3 — Fully Decentralized (`fully_decent_zanon_wo_coord`)
+
+The fully decentralized scenario represents the **lower bound on coordination**: each GW acts in complete isolation. There is no ring traversal, no shared CBF, and no inter-GW communication. Each GW applies z-anonymity using only the measurements from its own connected smart meters.
+
+### How It Works
+
+<Steps>
+  <Step title="Independent per-GW processing">
+    Each GW creates its own CBF, collects from its SMs, applies the z-threshold, and publishes — entirely independently. The for-loop is conceptually parallel (each GW receives its trigger simultaneously):
+
+    ```python
+    # zanon.py — fully_decent_zanon_wo_coord()
+    for gw in network.l_gws:
+        self.msg_cnt_gw_ce += 1  # trigger from CE to GW
+        cnt_struct = z_utils.create_cnt_structure(
+            gw.n_sm_conn, self.n_cycles_for_anon, self.cnt_struct_type
+        )
+        cnt_struct = self.fully_decent_collection_round(gw, cnt_struct, measurement_time)
+        cnt_struct = z_utils.ensure_min_cnt_z(cnt_struct, self.z)
+        self.fully_decent_publication_round(gw, cnt_struct, measurement_time)
+    ```
+  </Step>
+  <Step title="Local z-threshold only">
+    The z-threshold is applied against only the measurements seen by that single GW. A value that appears at three different GWs but only once per GW will be suppressed under `z = 2`, even though it was collectively observed three times in the network.
+  </Step>
+  <Step title="Direct publication to CE">
+    Eligible tuples are forwarded to the CE with `p_pub = 100`, as there is no ring-round coordination that requires probabilistic deniability.
+  </Step>
+</Steps>
+
+### Output Files
+
+```
+fully_decent_wo_coord_zanon_z_<z>_dt_<delta_t_seconds>_nGw_<n>_distSm_<dist>_maxSm_<m>_seed_<s>.csv
+simu_log_fully_decent_wo_coord_zanon_z_...csv
+```
+
+---
+
+## Scenario Comparison
+
+| Property | deZent (ring-coordinated) | Centralized | Fully Decentralized |
+|---|---|---|---|
+| **Who coordinates** | Rotating coordinating GW | Central Entity (CE) | None — each GW is independent |
+| **Inter-GW messages** | Yes — CBF passed around ring | No GW-GW coordination | None |
+| **CE sees raw data** | No | Yes (all raw measurements) | No |
+| **z-count scope** | Network-wide (all GWs) | Network-wide (all GWs) | Per-GW only |
+| **Privacy level** | High — CE cannot reconstruct readings | Medium — CE holds all raw data | High — no central accumulation |
+| **Publication ratio** | Close to centralized (qualitatively high) | Highest (exact z-counts) | Lowest (suppresses values seen by fewer GWs) |
+| **Output prefix** | `decent_w_comm_zanon_z_...` | `cent_w_comm_zanon_z_...` | `fully_decent_wo_coord_zanon_z_...` |
+
+<Accordion title="Why does fully decentralized produce fewer publications?">
+  In the fully decentralized scenario each GW applies z with respect to its own SMs only. Consider a measurement value `v` observed once at each of five GWs: the network-wide count is 5, which would satisfy `z = 5` in the centralized or deZent scenario. But each GW counts only 1 observation locally — below any `z > 1` threshold — so all five readings are suppressed. The deZent ring coordination solves precisely this problem by combining counts across GWs before the threshold is applied.
+</Accordion>
+
+## Message Count Tracking
+
+Both `msg_cnt_gwgw` and `msg_cnt_gw_ce` are instance variables on the `zAnon` object and are reset between scenarios (a fresh `zAnon` instance is created per scenario):
+
+```python
+# zanon.py — __init__
+self.msg_cnt_gwgw = 0   # gateway-to-gateway messages
+self.msg_cnt_gw_ce = 0  # gateway-to-CE messages
+```
+
+At simulation end, `main.py` prints the measured and expected counts for validation and writes them into the header of each output CSV:
+
+```python
+# main.py
+idx = generate_log_index(decent_zanon_env, column_list)
+public_log.columns = idx
+```
+
+The `generate_log_index` function prepends two rows — `msg_count_gwgw` and `msg_cnt_gw_ce` — before the actual tuple data columns, so every output file is self-documenting with its overhead statistics.
+
+### Expected Message Counts by Scenario
+
+Let `R` = number of rounds, `G` = number of GWs, `S` = total SMs, `P` = published tuples:
+
+| Counter | deZent | Centralized | Fully Decentralized |
+|---|---|---|---|
+| `msg_cnt_gwgw` (SM polling) | `S × 2 × R` | `S × 2 × R` | `S × 2 × R` |
+| `msg_cnt_gwgw` (CBF forwarding) | `G × R × 3`† | — | — |
+| `msg_cnt_gw_ce` (triggers) | `R` | `G × R` | `G × R` |
+| `msg_cnt_gw_ce` (publications) | `P` | all tuples within delta_t | `P` |
+
+† One collection ring traversal + up to two publication ring traversals per round.
+
+The additional `G × R × 3` GW-to-GW messages for ring coordination are the overhead cost of deZent's decentralized approach. The payoff is that the CE receives only the anonymized output stream.

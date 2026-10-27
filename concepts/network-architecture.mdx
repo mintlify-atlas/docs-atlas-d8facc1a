@@ -1,0 +1,234 @@
+---
+title: "Network Architecture: Gateways, Smart Meters, and the Central Entity"
+sidebarTitle: "Network Architecture"
+description: "deZent models a ring of gateways each managing smart meters, connected to a central entity. Gateways exchange Counting Bloom Filters to coordinate anonymization without revealing raw data."
+---
+
+deZent simulates a realistic smart metering district: a set of **Smart Meters** reporting consumption data to their local **Gateways**, with the Gateways connected in a **ring topology** and all ultimately forwarding anonymized data to a single **Central Entity**. The ring structure is deZent's key innovation — it lets gateways pool their z-anonymity counts without ever sharing raw meter readings with one another or with the central entity.
+
+## The Three Node Types
+
+<CardGroup cols={3}>
+  <Card title="Smart Meter (SM)" icon="bolt">
+    Reports a consumption value every 15 minutes. Each SM is assigned a profile type at initialization and draws its readings from real standard load-profile data.
+  </Card>
+  <Card title="Gateway (GW)" icon="server">
+    Manages N smart meters. Participates in the ring-based collection and publication protocol. Applies z-anonymity locally using a Counting Bloom Filter before forwarding tuples to the CE.
+  </Card>
+  <Card title="Central Entity (CE)" icon="building">
+    Receives the final anonymized data stream. Stores published tuples in a public log. In the deZent scenario, it never sees individual raw smart meter readings.
+  </Card>
+</CardGroup>
+
+### Smart Meter (SM)
+
+A Smart Meter measures energy consumption and maps the raw value to a **key bucket** so that small measurement noise does not create artificially unique values:
+
+```python
+# smartmeter.py
+def measure_data(self, curr_time):
+    col_idx = self.choose_col_by_isotimestamp(curr_time)
+    t_idx = curr_time.time()
+    consumption = self.data.loc[t_idx, col_idx]
+    consumption = int(consumption * self.type_class.scaling_sla)
+    rnd_noise = random.randint(0, int(consumption / 10))
+    consumption = consumption + rnd_noise
+    key_value = self.map_measurement_to_key(consumption)
+    return consumption, key_value
+```
+
+The `map_measurement_to_key` method rounds the raw consumption into variable-width bins (narrower at low values, wider at high values), ensuring that nearby readings hash to the same key and therefore contribute to the same z-count. Each SM is assigned one of the following **profile types** drawn from a statistically representative distribution for a Berlin district:
+
+| Profile Type | Description |
+|---|---|
+| `1p_household` | Single-person household |
+| `2p_household` | Two-person household |
+| `3p_household` / `4p_household` | Family household (3+ people) |
+| `workshop` / `bureau_workshop` | Office or light workshop |
+| `bakery` | Bakery (high early-morning consumption) |
+| `restaurant` | Restaurant (evening-heavy load) |
+| `store` | Retail store |
+| `hair_dresser` | Hair salon |
+
+The SM selects its load data from seasonal, weekday-aware Standard Load Profile (SLP) CSV files, with separate columns for winter/summer/interim and weekday/Saturday/Sunday patterns.
+
+### Gateway (GW)
+
+A Gateway is the central processing node. It holds a reference to the CE, a doubly-linked ring position (predecessor and successor GW), a list of connected SMs, and a local `record_log` that stores recent measurements within the anonymization window:
+
+```python
+# gateway.py
+class Gateway():
+    def __init__(self, ce, id=None, n_sm_conn=0):
+        self.ce = ce
+        self.id = id
+        self.gw_pred = None   # predecessor in ring
+        self.gw_suc = None    # successor in ring
+        self.n_sm_conn = n_sm_conn
+        self.l_sms = {}
+        self.record_log = RecordLog()
+        self.coord_noise = 0
+        self.gw_ce_msg_cnt = 0
+```
+
+During each measurement round the GW:
+
+<Steps>
+  <Step title="Collects from SMs">
+    Calls `measure_data()` on every connected SM and stores results in its local `record_log`, keyed by the measurement bucket value and SM ID.
+  </Step>
+  <Step title="Updates the CBF">
+    Calls `cnt_struct.add_measurements(record_log.log)` to insert measurement hashes into the Counting Bloom Filter received from its predecessor in the ring.
+  </Step>
+  <Step title="Forwards the CBF">
+    Passes the updated CBF to its successor GW, incrementing the GW-to-GW message counter (`msg_cnt_gwgw += 1`).
+  </Step>
+  <Step title="Publishes eligible tuples">
+    During the publication round, checks its local `record_log` against the CBF. Any current-round entry whose hash survives the z-threshold is forwarded to the CE via `publish_tuple()`.
+  </Step>
+</Steps>
+
+### Central Entity (CE)
+
+The CE is a passive collector in the deZent scenario. It stores published tuples in `pub_records` and all generated tuples (for simulation analysis only) in `simu_log`:
+
+```python
+# central_entity.py
+class CentralEntity():
+    def __init__(self):
+        self.clock = 0
+        self.id = "CE"
+        self.record_log = RecordLog()   # used only in centralized scenario
+        self.pub_records = PubLog()     # public output stream
+        self.simu_log = SimuLog()       # full simulation log (analysis only)
+```
+
+In the centralized scenario the CE also accumulates all GW data into its own `record_log` and applies the z-threshold centrally. In the deZent scenario it only receives pre-filtered tuples — it cannot reconstruct which SM reported any given value.
+
+## Ring Topology
+
+<Note>
+  The ring coordination in deZent is the key differentiator: it enables multi-GW awareness of measurement value frequencies without centralizing all raw data. Each GW adds its own measurements to the shared Counting Bloom Filter and passes it along — no GW ever sees another GW's raw values.
+</Note>
+
+Gateways are connected in a **sorted doubly-linked ring**: each GW knows exactly one predecessor (`gw_pred`) and one successor (`gw_suc`). The ring is built by `network.create_gw_ring()`, which inserts each GW into a sorted position using binary-style clockwise (`increasing_search`) or counter-clockwise (`decreasing_search`) traversal:
+
+```python
+# network.py
+def create_gw_ring(self):
+    entry_gw = None
+    for gw in self.l_gws:
+        if entry_gw is None:
+            gw.gw_pred = gw
+            gw.gw_suc = gw
+            entry_gw = gw
+            continue
+        if gw.id > entry_gw.id:
+            self.increasing_search(entry_gw, gw)
+        else:
+            self.decreasing_search(entry_gw, gw)
+```
+
+### GW ID Assignment
+
+GW IDs are drawn randomly from a pool of size **3 × n\_gws**, creating gaps in the ID space that make the ring ordering non-trivial:
+
+```python
+# network.py
+self.l_free_gw_ids = set(np.arange(0, 3 * n_gws))
+
+def get_gw_id(self):
+    gw_id = random.sample(list(self.l_free_gw_ids), 1)[0]
+    self.l_free_gw_ids.remove(gw_id)
+    return gw_id
+```
+
+Because IDs are sparse, the ring ends up sorted numerically in increasing order around the circle. The coordinating GW for the first round is always `network.l_gws[0]`, and coordination rotates to the successor after each round:
+
+```python
+# zanon.py — decent_zanon_w_comm()
+gw_coord = network.l_gws[0]
+# ... after each round:
+gw_coord = gw_coord.gw_suc
+```
+
+## Network Topology Diagram
+
+The following diagram shows the data flow relationships between node types. GW₀ is the coordinating gateway for round 1; the CBF travels clockwise around the ring before returning to GW₀ for threshold enforcement.
+
+```
+Smart Meters          Gateways (ring)                 Central Entity
+─────────────         ───────────────────────────      ──────────────
+SM₀₋₀  ──┐
+SM₀₋₁  ──┤──► GW₀ ◄──────────────────── GW₃
+SM₀₋₂  ──┘    │  ↖ (CBF round trip)    ↑  │
+               │                        │  │
+               ▼                        │  │
+SM₁₋₀  ──┐   GW₁ ──────────────────► GW₂  │
+SM₁₋₁  ──┤──►  │                           │
+SM₁₋₂  ──┘     │                           │
+                │   (anonymized tuples)     │
+                └──────────────────► CE ◄──┘
+                                    │
+                                    ▼
+                               Public Log (CSV)
+```
+
+The CBF makes one full clockwise pass through the ring (collection round), returns to the coordinating GW for z-threshold enforcement, then makes another pass (publication round) during which each GW publishes its eligible tuples directly to the CE.
+
+## The Counting Bloom Filter (CBF) as Coordination Token
+
+The CBF is the only data structure exchanged between GWs. Each GW adds its measurement **hashes** (not raw values) to the filter:
+
+```python
+# gateway.py
+def add_curr_measurement(self, cnt_struct, curr_time):
+    self.collect_curr_measurement_from_sms(curr_time)
+    cnt_struct.add_measurements(self.record_log.log)
+    return cnt_struct
+```
+
+A GW receiving a CBF from its predecessor can increment counters for its own measurement hashes, but cannot extract the values that the predecessor inserted. This is the core privacy property of the probabilistic filter: **the CBF is write-only from the perspective of any single participant**.
+
+The filter is sized dynamically by the coordinating GW based on its own `n_sm_conn` and the `n_cycles_for_anon` window length. Because the coordinator changes every round, filter sizes vary slightly — an effect deliberately accepted as it is expected to average out over time.
+
+## Measurement Round Lifecycle
+
+Each 15-minute measurement cycle follows this sequence in the deZent scenario:
+
+<Steps>
+  <Step title="Round initialization">
+    The coordinating GW (`gw_coord`) creates a fresh CBF sized for the expected number of measurements within `delta_t`. It adds a random noise element to the filter before the ring traversal begins, preventing filter-state inference.
+  </Step>
+  <Step title="Collection round">
+    Starting at `gw_coord.gw_suc`, the CBF travels clockwise around the ring. At each hop the current GW: (1) evicts stale entries from its `record_log`, (2) collects fresh measurements from its SMs, (3) adds measurement hashes to the CBF, and (4) forwards the CBF to its successor. The round completes when the CBF arrives back at `gw_coord`.
+  </Step>
+  <Step title="Threshold enforcement">
+    `gw_coord` removes its noise element, then calls `ensure_min_cnt_z(cnt_struct, z)` which subtracts `z − 1` from every counter. Only measurement hashes observed by ≥ z distinct meters survive.
+  </Step>
+  <Step title="Publication round">
+    The filtered CBF travels the ring again. At each GW, current-round entries from its `record_log` are checked against the CBF. Matching entries are published to the CE with a configurable probability `p_pub`, providing additional plausible deniability. In the first pass `p_pub` is random; in a potential second pass it is set to 100.
+  </Step>
+  <Step title="Next coordinator">
+    After the round completes, `gw_coord` advances to `gw_coord.gw_suc`, rotating coordination responsibility around the ring.
+  </Step>
+</Steps>
+
+## Message Counting
+
+deZent tracks two message counters per scenario to quantify coordination overhead:
+
+```python
+# zanon.py
+self.msg_cnt_gwgw = 0   # GW-to-GW messages (CBF forwarding + SM polling)
+self.msg_cnt_gw_ce = 0  # GW-to-CE messages (round triggers + published tuples)
+```
+
+| Message Type | When Counted | Formula (per round) |
+|---|---|---|
+| `msg_cnt_gwgw` — SM polling | At each GW for each SM (request + response) | `n_sm_conn × 2` per GW |
+| `msg_cnt_gwgw` — CBF forwarding | One message per ring hop | `n_gws` per collection round, `n_gws` per publication round |
+| `msg_cnt_gw_ce` — round trigger | CE (or coord GW) triggers each round | 1 per round |
+| `msg_cnt_gw_ce` — publication | Each published tuple forwarded to CE | 1 per published tuple |
+
+These counters are written to the header rows of each output CSV file for later overhead analysis.

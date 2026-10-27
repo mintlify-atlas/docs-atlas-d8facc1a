@@ -1,0 +1,178 @@
+---
+title: "ProfileDistribution: Realistic Consumer Type Distributions"
+sidebarTitle: "ProfileDistribution"
+description: "Reference for the ProfileDistribution classes, which assign smart meters to consumer types using real Berlin district demographic statistics and VDEW standard load profiles."
+---
+
+`ProfileDistribution` generates weighted distributions of consumer types for each gateway, grounding the simulation in real-world demographic data rather than uniform random assignment. The default implementation draws from the Treptow-Köpenick district of Berlin — a district whose household and commercial ratios closely match the Berlin city-wide average — so that each gateway's mix of simulated smart meters reflects a plausible urban neighbourhood. A Berlin city-wide variant is also available for comparison.
+
+---
+
+## `ProfileDistribution`
+
+The top-level coordinator class. Constructed once per gateway, it holds the final sample list and weight list used by Python's `random.choices()` to draw consumer types when populating a gateway with smart meters.
+
+```python
+class ProfileDistribution:
+    def __init__(self):
+        self.sm_sampleList = []    # list of consumer type name strings
+        self.sm_dist_weights = []  # list of corresponding sampling weights
+```
+
+### `generate_sm_weighted_distribution`
+
+Populates `sm_sampleList` and `sm_dist_weights` by delegating to the appropriate regional profile class. Must be called before using the distribution to assign SM types.
+
+```python
+def generate_sm_weighted_distribution(self, profile_type: str, gw_type: str) -> None
+```
+
+<ParamField path="profile_type" type="str" required>
+  Selects the regional demographic dataset. Passed directly to `choose_profile_by_name()`. Accepted values: `"tk"` (Treptow-Köpenick, default) and `"bln"` (Berlin city-wide). Any other value raises `ValueError`.
+</ParamField>
+
+<ParamField path="gw_type" type="str" required>
+  Selects which subset of consumer types to include. Currently only `"standard"` is supported, which uses all nine consumer type categories. Future gateway types may restrict to residential-only or commercial-only subsets.
+</ParamField>
+
+### `choose_profile_by_name`
+
+Factory method that returns the profile subclass instance matching the given name. Raises `ValueError` for unrecognised type strings.
+
+```python
+def choose_profile_by_name(self, type: str) -> ProfileDistribution_mask
+```
+
+<ParamField path="type" type="str" required>
+  `"tk"` returns a `ProfileDistribution_tk` instance; `"bln"` returns a `ProfileDistribution_bln` instance.
+</ParamField>
+
+**Returns** an instance of a `ProfileDistribution_mask` subclass whose `get_weighted_distribution()` method can be called to retrieve the sample list and weights.
+
+```python
+# Assign a Treptow-Köpenick weighted distribution to a gateway
+dist = ProfileDistribution()
+dist.generate_sm_weighted_distribution(profile_type="tk", gw_type="standard")
+
+# dist.sm_sampleList -> ["1p_household", "2p_household", ..., "hair_dresser"]
+# dist.sm_dist_weights -> [0.472, 0.300, ..., 0.00102]
+```
+
+---
+
+## `ProfileDistribution_tk`
+
+The primary regional profile, based on publicly available statistics for the Treptow-Köpenick district of Berlin. All ratio attributes are derived from the district's 146,611 total entities (households plus all commercial categories), making every weight directly comparable and summing to approximately 1.
+
+```python
+class ProfileDistribution_tk(ProfileDistribution_mask):
+    tot_n_entities   = 146_611  # households + all commercial categories
+    tot_n_households = 144_600
+
+    # Household ratios (relative to tot_n_entities)
+    relative_1p_household = 0.479  # ~69,300 one-person households
+    relative_2p_household = 0.304  # ~43,960 two-person households
+    relative_3p_household = 0.127  # ~18,300 three-or-more-person households
+    relative_4p_household = 0.091  # ~13,100 four-person households
+
+    # Commercial entity counts
+    n_industry    = 93    # manufacturing/industrial premises
+    n_workshops   = 481   # artisan workshops (Handwerksbetriebe)
+    n_bakery      = 18    # bakeries and confectioners
+    n_restaurants = 750   # restaurants and food-service outlets
+    n_store       = 1_000 # retail stores
+    n_hair_dresser = 150  # hairdressing salons
+```
+
+**Data sources:** [Destatis household statistics](https://www.destatis.de/DE/Themen/Gesellschaft-Umwelt/Bevoelkerung/Haushalte-Familien/Tabellen/1-2-privathaushalte-bundeslaender.html), [Berlin Senate statistics](https://www.statistischebibliothek.de), [DEHOGA restaurant figures](https://www.dehoga-bundesverband.de/zahlen-fakten/anzahl-der-unternehmen/), [Berlin Senate economic development office](https://www.berlin.de/ba-treptow-koepenick/politik-und-verwaltung/service-und-organisationseinheiten/wirtschaftsfoerderung/wirtschaftsstandort/artikel.116737.php).
+
+---
+
+## `ProfileDistribution_bln`
+
+An alternative Berlin city-wide profile. Uses aggregate figures for the entire city of Berlin rather than a single district, providing slightly different household ratios and significantly larger absolute commercial counts. Useful for sensitivity analysis or when modelling a large urban-scale deployment.
+
+```python
+class ProfileDistribution_bln(ProfileDistribution_mask):
+    # Household ratios (percentage of all Berlin households)
+    ratio_1p = 50   # 50% one-person households
+    ratio_2p = 29   # 29% two-person households
+    ratio_3p = 10   # 10% three-person households
+    ratio_4p = 8    # 8%  four-person households
+    ratio_5p = 3    # 3%  five-or-more-person households
+
+    # Commercial entity counts (Berlin-wide)
+    n_industry     = 752
+    n_workshops    = 7_167
+    n_bakery       = 210
+    n_hair_dresser = 1_799
+    n_store        = 19_200
+    n_restaurants  = 9_050
+```
+
+---
+
+## Consumer type classes
+
+Each consumer type is a lightweight class that encodes the entity's annual electricity consumption, the SLA scaling factor derived from it, and the filename of the corresponding standard load profile (Standardlastprofil). These attributes are consumed by the smart meter generator when creating measurement time-series for each simulated entity.
+
+<Note>
+  All SLA CSV files follow the VDEW standard and are normalized to an annual consumption of **1,000 kWh/year**. The `scaling_sla` attribute (`consumption_p_a / 1000`) scales each profile up to the entity's actual annual consumption before measurements are generated, ensuring realistic magnitude and daily shape for each consumer type.
+</Note>
+
+| Consumer type | Annual consumption | `scaling_sla` | SLA file | Real-world example |
+|---|---|---|---|---|
+| `household_1p` | 2,105 kWh/a | 2.105 | `SLA_h0_Haushalt.csv` | Single-person flat |
+| `household_2p` | 3,470 kWh/a | 3.470 | `SLA_h0_Haushalt.csv` | Couple or shared flat |
+| `household_3p_more` | 5,047 kWh/a | 5.047 | `SLA_h0_Haushalt.csv` | Family home (3+ people) |
+| `bureau_workshop` | 6,000 kWh/a | 6.000 | `SLA_g1_bureaus_workshops.csv` | 100 m² office or workshop |
+| `restaurant` | 20,000 kWh/a | 20.000 | `SLA_g2_restaurants.csv` | 100 m² food-service outlet |
+| `store` | 17,000 kWh/a | 17.000 | `SLA_g4_store_hairdresser.csv` | 100 m² retail store |
+| `hair_dresser` | 7,500 kWh/a | 7.500 | `SLA_g4_store_hairdresser.csv` | 50 m² hairdressing salon |
+| `bakery` | 25,000 kWh/a | 25.000 | `SLA_g5_bakery.csv` | Commercial bakery |
+
+### Class definitions
+
+```python
+class household_1p:
+    consumption_p_a = 2105
+    scaling_sla     = 2.105
+    sla_file        = "SLA_h0_Haushalt.csv"
+
+class household_2p:
+    consumption_p_a = 3470
+    scaling_sla     = 3.470
+    sla_file        = "SLA_h0_Haushalt.csv"
+
+class household_3p_more:
+    consumption_p_a = 5047
+    scaling_sla     = 5.047
+    sla_file        = "SLA_h0_Haushalt.csv"
+
+class bureau_workshop:
+    consumption_p_a = 6000
+    scaling_sla     = 6.0
+    sla_file        = "SLA_g1_bureaus_workshops.csv"
+
+class restaurant:
+    consumption_p_a = 20000
+    scaling_sla     = 20.0
+    sla_file        = "SLA_g2_restaurants.csv"
+
+class store:
+    consumption_p_a = 17000
+    scaling_sla     = 17.0
+    sla_file        = "SLA_g4_store_hairdresser.csv"
+
+class hair_dresser:
+    consumption_p_a = 7500
+    scaling_sla     = 7.5
+    sla_file        = "SLA_g4_store_hairdresser.csv"
+
+class bakery:
+    consumption_p_a = 25000
+    scaling_sla     = 25.0
+    sla_file        = "SLA_g5_bakery.csv"
+```
+
+**Consumption data sources:** [Destatis household electricity consumption](https://www.destatis.de/DE/Themen/Gesellschaft-Umwelt/Umwelt/UGR/private-haushalte/Tabellen/stromverbrauch-haushalte.html), [gasag.de commercial consumption estimates](https://www.gasag.de/magazin/energiesparen/stromverbrauch-unternehmen/), [wattline.de bakery energy costs](https://www.wattline.de/energiewissen/energiekosten-baeckerei/).

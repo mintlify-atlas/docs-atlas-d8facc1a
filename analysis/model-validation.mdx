@@ -1,0 +1,130 @@
+---
+title: "Model Validation: Comparing deZent with the Jha Baseline"
+sidebarTitle: "Model Validation"
+description: "Validate deZent's centralized scenario against the Jha et al. baseline by comparing published tuple counts and publication ratios using analyze_pub_diff.py."
+---
+
+Model validation is the process of verifying that deZent's implementation of z-anonymity faithfully reproduces the behaviour of the established reference. Specifically, this step compares the **centralized deZent scenario** (`cent_w_comm_zanon_z_...`) against the centralized z-anonymity implementation published by Jha et al. (IEEE BigData 2020). If both implementations operate on the same simulation log and produce identical publication counts and ratios, confidence in the correctness of the deZent codebase is established before the decentralized scenarios are evaluated.
+
+## Purpose
+
+deZent is validated by running both implementations on the same underlying simulation trace and measuring the difference in:
+
+- **Number of published tuples** (`n_pub_dez` vs. `n_pub_jha`)
+- **Publication ratio** (published / total tuples: `pub_rat_dez` vs. `pub_rat_jha`)
+
+A difference of zero across all seeds and parameter combinations confirms that deZent's centralized mode is equivalent to the Jha et al. reference.
+
+## `analyze_pub_diff.py`
+
+The script `model_validation/analyze_pub_diff.py` is the primary validation tool. For every combination of gateway count (`n_gw`), anonymity level (`z`), and random seed, it:
+
+1. Reads the deZent anonymized output CSV from `data/anonymized_data/deZent/` and counts the published tuples (`n_pub_dez`).
+2. Reads the corresponding simulation log from `data/log_data/deZent/` and counts the total tuples (`n_total`), then computes `pub_ratio_deZ = n_pub_dez / n_total`.
+3. Reads the Jha output text file from `data/anonymized_data/jha/` and counts the published tuples (`n_pub_jha`), then computes `pub_ratio_jha = n_pub_jha / n_total`.
+4. Computes the signed differences:
+   - `npub_diff = n_pub_jha − n_pub_dez`
+   - `pub_rat_diff = pub_rat_jha − pub_rat_dez`
+5. Appends one row per scenario × seed combination to a results DataFrame and writes it to `model_validation/data/npub_diff.csv`.
+
+### Input Paths
+
+| Path | Contents |
+|---|---|
+| `data/anonymized_data/deZent/` | deZent anonymized output CSVs |
+| `data/anonymized_data/jha/` | Jha baseline output text files (`output_jha_simu_log_*.csv.txt`) |
+| `data/log_data/deZent/` | Full simulation log CSVs (`simu_log_*.csv`) |
+
+### Output: `model_validation/data/npub_diff.csv`
+
+The output CSV contains one row per (`n_gw`, `z`, `seed`) combination with the following columns:
+
+| Column | Description |
+|---|---|
+| `n_gw` | Number of gateways in the simulated network |
+| `z` | Anonymity level (z-value) |
+| `n_pub_dez` | Number of tuples published by deZent |
+| `n_pub_jha` | Number of tuples published by the Jha implementation |
+| `n_total` | Total number of tuples in the simulation log |
+| `pub_rat_dez` | Publication ratio for deZent (`n_pub_dez / n_total`) |
+| `pub_rat_jha` | Publication ratio for Jha (`n_pub_jha / n_total`) |
+| `d_t` | Time window duration in seconds |
+| `seed` | Random seed used for the simulation run |
+| `npub_diff` | Absolute tuple count difference (`n_pub_jha − n_pub_dez`) |
+| `pub_rat_diff` | Publication ratio difference (`pub_rat_jha − pub_rat_dez`) |
+
+### Default Parameters
+
+The script ships with a conservative default configuration that can be extended by editing the list variables at the top of the file:
+
+```python
+l_n_gw  = [5]                  # gateway counts to evaluate
+l_z     = [1]                  # z-anonymity levels
+d_t     = 121 * 60             # time window: 7260 seconds (121 minutes)
+l_seed  = [1, 2, 3, 4, 5]     # random seeds
+dez_scenario = "cent_w_comm_zanon_z_"
+```
+
+To cover the full parameter space from the paper, extend these lists — for example:
+
+```python
+l_n_gw = [5, 25, 50, 75, 100, 125, 150]
+l_z    = [1, 5, 10, 25, 50, 100]
+l_seed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+```
+
+<Warning>
+  The Jha simulation must be executed before running `analyze_pub_diff.py`. Jha uses the simulation log files written during the deZent run as its input. See the README for the order of execution.
+</Warning>
+
+## How to Run
+
+From the repository root:
+
+```bash
+python3 model_validation/analyze_pub_diff.py
+```
+
+The script prints per-scenario diagnostics and writes `model_validation/data/npub_diff.csv`.
+
+## TEX Generation Scripts
+
+Three additional scripts convert the validation results into data files suitable for pgf/TikZ plots in the paper's LaTeX source:
+
+<Accordion title="extract_pub_diff_tex.py">
+  Reads `npub_diff.csv` and extracts the per-seed difference values into `.dat` files for use in pgf bar-chart figures. Output files are written to `model_validation/data/`.
+</Accordion>
+
+<Accordion title="generate_tex_pubvstime.py">
+  Generates publication-count-over-simulated-time plot data. Produces the `avg_deZ_npub_over_time_*.dat` and `avg_jha_npub_over_time_*.dat` files that track cumulative published tuple counts as a function of simulation time.
+</Accordion>
+
+<Accordion title="generate_tex_histogram.py">
+  Generates histogram plot data for the distribution of `npub_diff` and `pub_rat_diff` values across seeds and parameter configurations.
+</Accordion>
+
+Run each from the repository root:
+
+```bash
+python3 model_validation/extract_pub_diff_tex.py
+python3 model_validation/generate_tex_pubvstime.py
+python3 model_validation/generate_tex_histogram.py
+```
+
+## Pre-computed Output Files
+
+The following data files are already included in `model_validation/data/` and reflect the results reported in the paper:
+
+| File | Description |
+|---|---|
+| `npub_diff.csv` | Per-seed raw diff data (primary validation output) |
+| `avg_npub_diff.dat` | Mean `npub_diff` and standard deviation aggregated over seeds, indexed by `n_gw` and `z` |
+| `avg_pub_ratio_diff.dat` | Mean `pub_rat_diff` and standard deviation aggregated over seeds |
+| `avg_deZ_npub_over_time_*.dat` | deZent cumulative publication count over simulated time |
+| `avg_jha_npub_over_time_*.dat` | Jha cumulative publication count over simulated time |
+
+The `*.dat` files use space-separated columns and are consumed directly by pgf plots in the paper's LaTeX source.
+
+<Note>
+  The pre-computed data in `model_validation/data/` allows you to inspect and plot validation results without re-running either simulation. All values of `npub_diff` and `pub_rat_diff` in the included dataset are 0, confirming that the centralized deZent scenario is equivalent to the Jha baseline for the tested parameters.
+</Note>

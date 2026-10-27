@@ -1,47 +1,201 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with deZent Simulations"
+sidebarTitle: "Quickstart"
+description: "Install deZent's Python dependencies, set up a virtual environment, and run all three z-anonymity simulation scenarios with a single command in under five minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through cloning the repository, setting up a Python virtual environment, installing all required packages, and executing your first simulation run. A single invocation of `main.py` runs all three scenarios — deZent ring-coordinated, centralized, and fully decentralized — on the same synthetic network and writes the results to CSV files ready for analysis.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Prerequisites">
+    Ensure you have the following before proceeding:
+
+    - **Python 3.10 or later** — verify with `python3 --version`
+    - **Git** — to clone the repository
+
+    Clone the repository to your local machine:
 
     ```bash
-    npm install your-package
+    git clone https://github.com/carolin-brunn/deZent-local_zanon.git
+    cd deZent-local_zanon
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Create and activate a virtual environment">
+    Creating a virtual environment keeps deZent's dependencies isolated from your system Python installation.
 
     ```bash
-    your-cli init
+    python3 -m venv .venv
     ```
+
+    Then activate the environment for your operating system:
+
+    <CodeGroup>
+
+    ```bash Linux / macOS
+    source .venv/bin/activate
+    ```
+
+    ```bash Windows
+    .venv\Scripts\activate
+    ```
+
+    </CodeGroup>
+
+    Your shell prompt should now be prefixed with `(.venv)`, confirming the environment is active.
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Install required packages">
+    Install all dependencies from the project's `requirements.txt`:
 
     ```bash
-    your-cli start
+    pip3 install -r requirements.txt
+    ```
+
+    The following packages will be installed:
+
+    | Package | Version | Purpose |
+    |---|---|---|
+    | `bitarray` | ~=3.8.0 | Efficient bit arrays used in Bloom Filter implementation |
+    | `fnvhash` | ~=0.2.1 | FNV hashing for Counting Bloom Filter entries |
+    | `numpy` | ~=2.4.1 | Numerical operations and array handling |
+    | `matplotlib` | ~=3.10.8 | Plotting and visualization |
+    | `mmh3` | ~=5.2.0 | MurmurHash3 for additional Bloom Filter hash functions |
+    | `pandas` | ~=2.3.3 | DataFrame manipulation and CSV output |
+    | `scipy` | ~=1.17.0 | Statistical distributions for SM profile sampling |
+    | `simpy` | ~=4.1.1 | Discrete-event simulation engine |
+    | `seaborn` | ~=0.13.2 | Statistical data visualization |
+  </Step>
+
+  <Step title="Navigate to the simulation directory">
+    All simulation entry points are located under `deZent/src/`. The output paths in `main.py` are relative to this directory, so you must run the script from here.
+
+    ```bash
+    cd deZent/src/
     ```
   </Step>
+
+  <Step title="Run the simulation">
+    Execute `main.py` with four positional arguments:
+
+    ```bash
+    python3 main.py <n_gw> <n_max_sm> <z> <seed>
+    ```
+
+    **Parameter reference:**
+
+    | Argument | Type | Description | Example values |
+    |---|---|---|---|
+    | `n_gw` | `int` | Number of gateways arranged in the ring network | `5`, `25`, `50`, `100` |
+    | `n_max_sm` | `int` | Maximum smart meters per gateway; actual counts are drawn from a normal distribution centred on this value | `20` |
+    | `z` | `int` | Z-anonymity threshold — a data point is published only when at least *z* identical values have been observed within the time window. Set to `0` to disable anonymization | `1`, `5`, `10`, `25` |
+    | `seed` | `int` | Random seed for reproducible network generation and measurement sampling | `1`–`10` |
+
+    **Concrete example** — 5 gateways, up to 20 smart meters each, z = 1, seed = 1:
+
+    ```bash
+    python3 main.py 5 20 1 1
+    ```
+
+    <Note>
+      Simulating all parameter combinations at once takes a long time. Use the provided bash script in `/scripts/` to automate batch runs, or split parameter sets across several script files and execute them simultaneously for faster throughput. Remember to make the script executable first: `chmod +x run_zanon_simu.sh`.
+    </Note>
+  </Step>
+
+  <Step title="Review the output files">
+    A successful run writes **three CSV files** (one per scenario) to `data/anonymized_data/deZent/` and **three simulation log files** to `data/log_data/deZent/`. File names encode all run parameters for easy identification.
+
+    **Anonymized data CSVs** (published, anonymized measurement records):
+
+    ```
+    data/anonymized_data/deZent/
+    ├── decent_w_comm_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv
+    ├── cent_w_comm_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv
+    └── fully_decent_wo_coord_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv
+    ```
+
+    **Simulation log CSVs** (all measurement tuples, including unpublished ones — used by the Jha baseline and analysis scripts):
+
+    ```
+    data/log_data/deZent/
+    ├── simu_log_decent_w_comm_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv
+    ├── simu_log_cent_w_comm_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv
+    └── simu_log_fully_decent_wo_coord_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv
+    ```
+
+    Each CSV's first two rows contain the GW–GW and GW–CE message counts recorded during that scenario, followed by the anonymized measurement records as columns.
+
+    **Sample console output** for the run above:
+
+    ```
+    ['main.py', '5', '20', '1', '1']
+    __create nw__: created network instance
+    __decent_wc_zanonymize__: start run
+    __SIMULATION END__
+    Decentral MSG CNT GWGW:  4560
+    Decentral MSG CNT GWCE:  192
+    __central_zanonymize w cnt_struct__: start run
+    Central MSG CNT GWGW:  4560
+    Central MSG CNT GWCE:  864
+    __decent_wc_zanonymize__: start run
+    Fully Decentral MSG CNT GWGW:  4560
+    Fully Decentral MSG CNT GWCE:  576
+    Rounds:  96
+    Total # SMs in network:  95
+    ######################################################################
+    Fully decentral total tuples: 9120
+    Fully decentral published tuples: 9120
+    Fully Decentral MSG CNT GWGW:  4560
+    Fully Decentral expected MSG CNT GWGW:  18240
+    Fully Decentral MSG CNT GW CE:  576
+    Fully Decentral expected MSG CNT GW CE:  10056
+    ######################################################################
+    Central total tuples: 9120
+    Central published tuples: 9120
+    Central MSG CNT GWGW:  4560
+    Central expected MSG CNT GWGW:  18240
+    Central MSG CNT GW CE:  864
+    Central expected MSG CNT GW CE:  10344
+    ######################################################################
+    Decentral total tuples: 9120
+    Decentral published tuples: 9120
+    Decentral measured MSG CNT GW-GW:  4560
+    Decentral expected additional mSG GW GW:  1440
+    Decentral expected MSG CNT GW-GW:  19680
+    Decentral measured MSG CNT GW CE:  192
+    Decentral expected MSG CNT GW CE:  10056
+    ```
+
+    <Tip>
+      The summary block at the end of the run prints **measured vs. expected** message counts for both GW–GW and GW–CE channels across all three scenarios. These counts are the primary metric for evaluating the communication overhead of each approach.
+    </Tip>
+  </Step>
+
+  <Step title="Next steps: Jha baseline and data analysis">
+    With simulation output in place, you can run the Jha et al. centralized baseline and the data analysis pipeline.
+
+    **Run the Jha baseline** (requires deZent simulation logs to exist first):
+
+    ```bash
+    cd ../../jha_cent_zanon/
+    # Edit l_n_gw and z_val in test_zanon.py to match your simulation parameters
+    python3 test_zanon.py
+    ```
+
+    **Run model validation** (compares publication ratios between deZent centralized and Jha):
+
+    ```bash
+    cd ../data_analysis/
+    python3 analyze_pub_diff.py
+    ```
+
+    **Compute full simulation statistics** for the evaluation reported in the paper:
+
+    ```bash
+    cd data_analysis/analyze_simulation/
+    python3 analyze_simu_stats.py
+    ```
+  </Step>
+
 </Steps>
-
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>

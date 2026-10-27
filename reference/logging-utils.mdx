@@ -1,0 +1,268 @@
+---
+title: "logging_utils: Record and Publication Log Data Structures"
+sidebarTitle: "logging_utils"
+description: "Reference for logging_utils — the RecordLog, PubLog, SimuLog, and entry classes used to track smart meter measurements, publication status, and full simulation history."
+---
+
+`logging_utils.py` defines the in-memory data structures that all simulation components use to record, track, and publish measurements. Every gateway and the central entity maintain a `RecordLog` for the active anonymization window, the central entity accumulates a `PubLog` of all tuples it has published, and a `SimuLog` captures every measurement event across the entire simulation run for post-hoc analysis and evaluation.
+
+---
+
+## `RecordLog`
+
+A dictionary-based log that holds all measurements currently within the anonymization window `delta_t`. Keyed by measurement hash (`m_key`), each entry maps to a nested dictionary of `sm_id → RecordLogEntry`, so multiple smart meters that observed the same measurement value are tracked individually. This two-level structure lets the system detect how many distinct sources share a value (the z-count) while also recording when each individual SM last reported it.
+
+```python
+class RecordLog:
+    def __init__(self):
+        self.log: dict[str, dict[str, RecordLogEntry]] = {}
+```
+
+### `add_new_m_to_record_log`
+
+Inserts or updates a single measurement observation in the log. If the measurement key has been seen before, the entry for the specific SM is overwritten with the new timestamp. If the key is entirely new, a fresh nested dictionary is created for it. New entries always have `is_published = False`.
+
+```python
+def add_new_m_to_record_log(
+    self,
+    curr_measurement,  # original (unrounded) measurement value
+    m_key,             # hashed/rounded measurement key used as dict key
+    sm_id,             # identifier of the reporting smart meter
+    sm_type,           # consumer type string (e.g. "1p_household")
+    t,                 # datetime of the measurement
+) -> dict
+```
+
+<ParamField path="curr_measurement" type="float" required>
+  The original measurement value before rounding or hashing. Stored inside the `RecordLogEntry` for later publication.
+</ParamField>
+
+<ParamField path="m_key" type="str" required>
+  The key used to group measurements that are considered equivalent under z-anonymity (typically a rounded or hashed value). Measurements with the same `m_key` contribute to the same z-count.
+</ParamField>
+
+<ParamField path="sm_id" type="str" required>
+  The identifier of the smart meter reporting this measurement. Used as the inner dictionary key to distinguish contributions from different SMs.
+</ParamField>
+
+<ParamField path="sm_type" type="str" required>
+  The consumer type of the reporting SM (e.g. `"1p_household"`, `"bakery"`). Stored in the entry for output and analysis purposes.
+</ParamField>
+
+<ParamField path="t" type="datetime" required>
+  Simulation clock time when the measurement was taken. Used by `apply_deltat_to_records()` to evict entries older than the anonymization window.
+</ParamField>
+
+**Returns** the full `log` dictionary after the update.
+
+```python
+# Gateway records a new measurement from SM "gw1_sm3" at the current sim time
+record_log.add_new_m_to_record_log(
+    curr_measurement=2.41,
+    m_key="2.4",
+    sm_id="gw1_sm3",
+    sm_type="1p_household",
+    t=env.now
+)
+```
+
+### `update_local_record_log`
+
+Marks a previously recorded measurement as published. Called after `publish_anonyimzed_tuples()` confirms that a tuple was forwarded to the central entity, to prevent the same measurement being published a second time in a subsequent round.
+
+```python
+def update_local_record_log(self, pub_tuple: PubLogEntry) -> dict
+```
+
+<ParamField path="pub_tuple" type="PubLogEntry" required>
+  The published entry. Its `key`, `id` (sm_id), `measurement`, `sm_type`, and `time` fields are used to locate and overwrite the corresponding `RecordLogEntry` with `is_published = True`.
+</ParamField>
+
+**Returns** the updated `log` dictionary.
+
+---
+
+## `RecordLogEntry`
+
+A single observation record within a `RecordLog`. Stores the original measurement value, the time it was recorded, the consumer type of the reporting SM, and whether it has already been published.
+
+```python
+class RecordLogEntry:
+    def __init__(self, m, sm_type, time, is_pub):
+        self.orig_measurement = m         # original float measurement value
+        self.sm_type          = sm_type   # consumer type string
+        self.time             = time      # datetime of observation
+        self.is_published     = is_pub    # bool, default False on creation
+```
+
+<ParamField path="orig_measurement" type="float" required>
+  The raw measurement value as reported by the smart meter, before any rounding applied for z-grouping.
+</ParamField>
+
+<ParamField path="sm_type" type="str" required>
+  Consumer type identifier (e.g. `"restaurant"`, `"2p_household"`). Propagated into `PubLogEntry` and output CSVs.
+</ParamField>
+
+<ParamField path="time" type="datetime" required>
+  Timestamp of the observation. Compared against `curr_time - delta_t` during eviction.
+</ParamField>
+
+<ParamField path="is_published" type="bool" default="False">
+  Publication flag. Set to `True` by `update_local_record_log()` once the tuple has been forwarded to the central entity. Prevents duplicate publication in later rounds.
+</ParamField>
+
+---
+
+## `PubLog`
+
+The central entity's log of all tuples that have been successfully anonymized and published. Internally backed by a pandas DataFrame, which makes it straightforward to export to CSV at the end of a simulation run.
+
+```python
+class PubLog:
+    def __init__(self):
+        self.log = pd.DataFrame(columns=["value", "time", "ID", "orig_measurement", "type"])
+```
+
+The DataFrame columns map to the fields of each published tuple:
+
+| Column | Source field | Description |
+|---|---|---|
+| `value` | `pub_tuple.key` | Hashed/rounded measurement key (the anonymized value) |
+| `time` | `pub_tuple.time` | Simulation time of the original measurement |
+| `ID` | `pub_tuple.id` | Smart meter identifier |
+| `orig_measurement` | `pub_tuple.measurement` | Raw original measurement value |
+| `type` | `pub_tuple.sm_type` | Consumer type of the reporting SM |
+
+### `add_new_tuple`
+
+Appends a published tuple to the log using `pandas.concat()`.
+
+```python
+def add_new_tuple(self, pub_tuple: PubLogEntry) -> None
+```
+
+<ParamField path="pub_tuple" type="PubLogEntry" required>
+  The publication entry to append. All five DataFrame columns are populated from its fields.
+</ParamField>
+
+<Note>
+  `PubLog` is exported to the **anonymized data CSV files** under `data/anonymized_data/deZent/`. These files contain only the tuples that passed the z-anonymity threshold and were selected for publication — they represent the privacy-safe output of the simulation.
+</Note>
+
+---
+
+## `PubLogEntry`
+
+A single published tuple. Created by a gateway or the central entity at the moment of publication and forwarded to the central entity's `PubLog`.
+
+```python
+class PubLogEntry:
+    def __init__(self, key, orig_measurement, time, sm_id, sm_type):
+        self.key         = key               # hashed/rounded measurement key
+        self.time        = time              # datetime of original measurement
+        self.id          = sm_id             # smart meter identifier
+        self.measurement = orig_measurement  # raw float measurement value
+        self.sm_type     = sm_type           # consumer type string
+```
+
+<ParamField path="key" type="str" required>
+  The measurement hash or rounded value that serves as the anonymized identifier. This is what appears as `value` in the output CSV.
+</ParamField>
+
+<ParamField path="orig_measurement" type="float" required>
+  The un-rounded measurement value. Retained for analysis but never transmitted outside the simulation in a real deployment.
+</ParamField>
+
+<ParamField path="time" type="datetime" required>
+  When the measurement was originally taken. Preserved through publication so the anonymized record retains its temporal context.
+</ParamField>
+
+<ParamField path="sm_id" type="str" required>
+  Identifier of the smart meter that produced this measurement. Used by `update_local_record_log()` to locate and flag the corresponding `RecordLogEntry`.
+</ParamField>
+
+<ParamField path="sm_type" type="str" required>
+  Consumer type of the reporting SM. Included in output CSVs to support consumption-type-stratified analysis.
+</ParamField>
+
+---
+
+## `SimuLog`
+
+The complete simulation log — a pandas DataFrame containing every measurement event generated during the run, published or not. Used after the simulation to compute the publication ratio (`n_published / n_total`) and to feed the Jha et al. centralized baseline, which reprocesses the same measurement stream independently.
+
+```python
+class SimuLog:
+    def __init__(self):
+        self.log = pd.DataFrame(columns=["value", "time", "ID", "orig_measurement", "type"])
+```
+
+The DataFrame schema is identical to `PubLog`, with the same five columns: `value`, `time`, `ID`, `orig_measurement`, `type`.
+
+### `add_new_tuple`
+
+Appends a measurement event to the simulation log using `pandas.concat()`.
+
+```python
+def add_new_tuple(self, t: SimuLogEntry) -> None
+```
+
+<ParamField path="t" type="SimuLogEntry" required>
+  The simulation log entry to append. All five columns are populated from its fields.
+</ParamField>
+
+<Note>
+  `SimuLog` would not exist in a real z-anonymity deployment. It is a simulation-only construct: collecting every raw measurement event into a single log would itself be a severe privacy violation. In deZent, `SimuLog` exists purely to enable evaluation — comparing what was published against what could have been published, and providing input data for the Jha et al. baseline validation.
+</Note>
+
+<Note>
+  `SimuLog` is exported to the **simulation log CSV files** under `data/log_data/deZent/`. These files are required inputs for `jha_cent_zanon/test_zanon.py` (which replays the measurement stream through the centralized baseline) and for `data_analysis/analyze_pub_diff.py` (which computes the publication ratio difference between deZent and Jha).
+</Note>
+
+---
+
+## `SimuLogEntry`
+
+A single entry in the complete simulation log, structurally identical to `PubLogEntry` but created for every measurement event regardless of whether it is ever published.
+
+```python
+class SimuLogEntry:
+    def __init__(self, key, orig_measurement, time, sm_id, sm_type):
+        self.key         = key               # hashed/rounded measurement key
+        self.measurement = orig_measurement  # raw float measurement value
+        self.time        = time              # datetime of original measurement
+        self.id          = sm_id             # smart meter identifier
+        self.sm_type     = sm_type           # consumer type string
+```
+
+<ParamField path="key" type="str" required>
+  The measurement hash or rounded value. Used as the `value` column in the SimuLog DataFrame and as the lookup key in the Jha baseline's count structure.
+</ParamField>
+
+<ParamField path="orig_measurement" type="float" required>
+  The raw measurement value before rounding. Stored alongside `key` for full-fidelity analysis.
+</ParamField>
+
+<ParamField path="time" type="datetime" required>
+  Simulation time of the measurement event.
+</ParamField>
+
+<ParamField path="sm_id" type="str" required>
+  Identifier of the reporting smart meter, stored as the `ID` column in the DataFrame.
+</ParamField>
+
+<ParamField path="sm_type" type="str" required>
+  Consumer type of the reporting SM.
+</ParamField>
+
+```python
+# Every SM measurement is logged unconditionally to SimuLog
+entry = SimuLogEntry(
+    key="2.4",
+    orig_measurement=2.41,
+    time=env.now,
+    sm_id="gw1_sm3",
+    sm_type="1p_household"
+)
+simu_log.add_new_tuple(entry)
+```

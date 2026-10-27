@@ -1,0 +1,338 @@
+---
+title: "zAnon: Z-Anonymization Engine Reference"
+sidebarTitle: "zAnon"
+description: "Complete reference for the zAnon class — the core simulation engine implementing decentralized, centralized, and fully decentralized z-anonymity scenarios."
+---
+
+The `zAnon` class is the central orchestration engine of deZent. It drives all three simulation scenarios — decentralized ring-based coordination (`decent_zanon_w_comm`), centralized CE-mediated collection (`central_zanon_w_cnt_struct`), and fully decentralized per-GW processing (`fully_decent_zanon_wo_coord`) — as SimPy generator processes. Each scenario ticks at a 15-minute measurement frequency, maintains a `delta_t` anonymization window over which historical records are retained, and enforces a z-anonymity threshold before any data is forwarded to the Central Entity for publication. Message counters (`msg_cnt_gwgw` and `msg_cnt_gw_ce`) record inter-component traffic for later analysis.
+
+## Constructor
+
+```python
+class zAnon:
+    def __init__(self, env: simpy.Environment, dt_minutes: int, z: int) -> None
+```
+
+<ParamField path="env" type="simpy.Environment" required>
+  The SimPy discrete-event simulation environment that drives all `yield` timeouts inside the scenario generators.
+</ParamField>
+
+<ParamField path="dt_minutes" type="int" required>
+  Length of the anonymization window in minutes. Stored internally as `datetime.timedelta(minutes=dt_minutes)`. The paper's default value is **121 minutes**.
+</ParamField>
+
+<ParamField path="z" type="int" required>
+  The z-anonymity threshold. Only measurement hashes that have been observed at least `z` distinct smart meters within `delta_t` are eligible for publication.
+</ParamField>
+
+### Instance Attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `delta_t` | `datetime.timedelta` | Anonymization window derived from `dt_minutes`. |
+| `z` | `int` | Z-anonymity threshold passed at construction. |
+| `clock` | `datetime` \| `None` | Current simulation wall-clock time; updated at the start of every round. |
+| `measurement_frequency` | `datetime.timedelta` | Fixed 15-minute interval between successive measurement rounds. |
+| `n_cycles_for_anon` | `float` | Number of 15-minute measurement cycles that fit inside `delta_t`; computed as `max(1, delta_t.seconds / measurement_frequency.seconds)`. |
+| `cnt_struct_type` | `str` | Type of counting data structure used for aggregation. Always `"bloom"` (Counting Bloom Filter). |
+| `msg_cnt_gwgw` | `int` | Cumulative count of GW-to-GW messages sent during the simulation. |
+| `msg_cnt_gw_ce` | `int` | Cumulative count of GW-to-CE (and CE-to-GW) messages sent during the simulation. |
+
+---
+
+## Decentralized Scenario
+
+### `decent_zanon_w_comm`
+
+```python
+def decent_zanon_w_comm(self, network: Network, t_start_offset: datetime) -> Generator
+```
+
+SimPy generator that runs the deZent **decentralized scenario with ring coordination**. The Central Entity is never involved in data collection or aggregation — it only receives already-anonymized tuples at the end of each round.
+
+The coordinating gateway (`gw_coord`) starts at `network.l_gws[0]` and advances to its ring successor at the end of every round, so coordination responsibility rotates evenly across all gateways.
+
+**Round sequence:**
+
+1. Advance the simulation clock and capture `measurement_time`.
+2. Create a fresh `CBloomFilter` via `zanon_utils.create_cnt_structure` sized for the coordinator's SM count.
+3. Increment `msg_cnt_gw_ce += 1` (trigger message to coordinating GW).
+4. Add random noise to the CBF via `gw_coord.add_initial_noise_to_cnt_struct`.
+5. Traverse the ring with `decent_collection_round`, starting at the coordinator's successor.
+6. Strip the noise with `gw_coord.remove_initial_noise_from_cnt_struct`.
+7. Enforce z-anonymity via `zanon_utils.ensure_min_cnt_z(cnt_struct, z)`.
+8. Distribute publication responsibility via `decent_publication_round`.
+9. Advance `gw_coord` to `gw_coord.gw_suc` for the next round.
+10. `yield env.timeout(15)` — wait 15 simulation-minutes until the next cycle.
+
+<ParamField path="network" type="Network" required>
+  The fully initialized `Network` instance whose `l_gws` list and ring pointers are used for traversal.
+</ParamField>
+
+<ParamField path="t_start_offset" type="datetime.datetime" required>
+  Real-world datetime that anchors the start of the simulation. Added to the SimPy clock value to produce wall-clock `measurement_time` values.
+</ParamField>
+
+---
+
+### `decent_collection_round`
+
+```python
+def decent_collection_round(
+    self,
+    curr_gw: Gateway,
+    coord_id: int,
+    cnt_struct: CBloomFilter,
+    curr_time: datetime,
+) -> CBloomFilter
+```
+
+Traverses the gateway ring starting from the **coordinator's successor**, collecting measurements at every stop and forwarding the updated CBF until the ring returns to the coordinating gateway.
+
+**At each gateway stop:**
+
+1. Evict stale records: `zanon_utils.apply_deltat_to_records(curr_gw.record_log, curr_time, delta_t)`.
+2. Collect SM readings and merge them into the CBF: `curr_gw.add_curr_measurement(cnt_struct, curr_time)`.
+3. Increment `msg_cnt_gwgw += curr_gw.n_sm_conn * 2` (one request + one response per connected SM).
+4. If `curr_gw.id == coord_id`, the ring is complete — break.
+5. Otherwise, advance to `curr_gw.gw_suc` and increment `msg_cnt_gwgw += 1` (CBF forwarding message).
+
+Returns the fully populated `CBloomFilter` after a complete ring traversal.
+
+<ParamField path="curr_gw" type="Gateway" required>
+  The first gateway to visit — always the coordinator's immediate ring successor.
+</ParamField>
+
+<ParamField path="coord_id" type="int" required>
+  ID of the coordinating gateway; used as the ring-completion sentinel.
+</ParamField>
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The Counting Bloom Filter passed along the ring and updated at each stop.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Current measurement timestamp; used for delta-t eviction and for tagging new records.
+</ParamField>
+
+---
+
+### `decent_publication_round`
+
+```python
+def decent_publication_round(
+    self,
+    curr_gw: Gateway,
+    coord_id: int,
+    cnt_struct: CBloomFilter,
+    curr_time: datetime,
+) -> None
+```
+
+Traverses the ring to distribute publication responsibility across all gateways. Uses a **two-pass probabilistic strategy** to balance privacy and completeness:
+
+- **First pass:** a random integer `p_pub` in `[0, 100]` is drawn; each GW publishes eligible tuples with probability `p_pub / 100`.
+- **Second pass:** `p_pub` is set to `100`, ensuring all remaining eligible tuples are published.
+
+Early exit conditions:
+
+- The CBF becomes empty (all publishable values have been published).
+- The ring has been traversed a second full time.
+- The first pass used `p_pub == 100` (second pass is then redundant).
+
+At each stop, `zanon_utils.publish_anonyimzed_tuples` is called on the current GW, and `msg_cnt_gw_ce` is incremented by the number of tuples forwarded to the CE.
+
+<ParamField path="curr_gw" type="Gateway" required>
+  First gateway in the publication traversal — the coordinator's ring successor.
+</ParamField>
+
+<ParamField path="coord_id" type="int" required>
+  ID of the coordinating gateway; used to detect when one full ring traversal is complete.
+</ParamField>
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The noise-stripped, z-enforced CBF used to check which measurement hashes are publishable.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Current measurement timestamp forwarded to `publish_anonyimzed_tuples`.
+</ParamField>
+
+---
+
+## Centralized Scenario
+
+### `central_zanon_w_cnt_struct`
+
+```python
+def central_zanon_w_cnt_struct(self, network: Network, t_start_offset: datetime) -> Generator
+```
+
+SimPy generator that runs the **centralized scenario**: the Central Entity (`network.ce`) acts as coordinator, triggering all gateways to report their measurements, aggregating everything into a central counting structure, enforcing z, and publishing.
+
+**Round sequence:**
+
+1. Advance the clock to `measurement_time`.
+2. Call `central_collection_round(ce, network.l_gws, measurement_time)` → returns a pandas `DataFrame` `cnt_struct`.
+3. Enforce z: `zanon_utils.central_ensure_min_cnt_z(cnt_struct, z)`.
+4. Publish: `central_publication_round(ce, cnt_struct, measurement_time)`.
+5. `yield env.timeout(15)`.
+
+<ParamField path="network" type="Network" required>
+  The initialized `Network`; `network.ce` is the Central Entity and `network.l_gws` is the list of all gateways.
+</ParamField>
+
+<ParamField path="t_start_offset" type="datetime.datetime" required>
+  Real-world datetime offset applied to the SimPy clock to produce absolute `measurement_time` values.
+</ParamField>
+
+---
+
+### `central_collection_round`
+
+```python
+def central_collection_round(
+    self,
+    ce: CentralEntity,
+    l_gws: list[Gateway],
+    curr_time: datetime,
+) -> pd.DataFrame
+```
+
+Collects measurements from every gateway and accumulates them in the Central Entity's record log.
+
+**Steps:**
+
+1. Evict stale CE records: `zanon_utils.apply_deltat_to_records(ce.record_log, curr_time, delta_t)`.
+2. For each GW in `l_gws`:
+   - `msg_cnt_gw_ce += 1` (CE→GW trigger message).
+   - `gw.collect_curr_measurement_from_sms(curr_time)` — GW polls all its SMs.
+   - `msg_cnt_gwgw += gw.n_sm_conn * 2` (SM round-trips at GW level).
+   - `n_added_m = ce.update_central_record_log(gw.record_log.log, curr_time)` — CE ingests GW data.
+   - `msg_cnt_gw_ce += int(n_added_m)` (one message per current tuple sent GW→CE).
+3. Call `ce.cnt_curr_values()` to build and return a pandas `DataFrame` with columns `measurement` and `tuple_count`.
+
+<ParamField path="ce" type="CentralEntity" required>
+  The Central Entity instance that owns the global record log.
+</ParamField>
+
+<ParamField path="l_gws" type="list[Gateway]" required>
+  Ordered list of all gateways in the network.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Current measurement timestamp used for delta-t eviction and new-record tagging.
+</ParamField>
+
+**Returns:** `pd.DataFrame` with columns `measurement` (hashed key) and `tuple_count` (observed count within `delta_t`).
+
+---
+
+### `central_publication_round`
+
+```python
+def central_publication_round(
+    self,
+    ce: CentralEntity,
+    cnt_struct: pd.DataFrame,
+    curr_time: datetime,
+) -> None
+```
+
+Publishes all eligible measurement tuples held by the Central Entity. Sets `p_pub = 100` (no probabilistic suppression) and delegates to `zanon_utils.publish_anonyimzed_tuples(ce, cnt_struct, 100, curr_time)`.
+
+<ParamField path="ce" type="CentralEntity" required>
+  The Central Entity from whose record log tuples are published.
+</ParamField>
+
+<ParamField path="cnt_struct" type="pd.DataFrame" required>
+  The z-filtered DataFrame produced by `central_collection_round`; columns `measurement` and `tuple_count`.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Current measurement timestamp passed to the publication utility.
+</ParamField>
+
+---
+
+## Fully Decentralized Scenario
+
+### `fully_decent_zanon_wo_coord`
+
+```python
+def fully_decent_zanon_wo_coord(self, network: Network, t_start_offset: datetime) -> Generator
+```
+
+SimPy generator for the **fully decentralized scenario without inter-GW coordination**. Every gateway operates independently: each creates its own CBF, collects only its local SM readings, enforces z on that local view, and publishes. No ring traversal or coordinator election occurs.
+
+In practice each GW receives its trigger simultaneously; the `for` loop models this as conceptually parallel per-GW processing.
+
+**Round sequence (per GW):**
+
+1. `msg_cnt_gw_ce += 1` (CE→GW trigger).
+2. `create_cnt_structure(gw.n_sm_conn, n_cycles_for_anon, "bloom")` — fresh per-GW CBF.
+3. `fully_decent_collection_round(gw, cnt_struct, measurement_time)`.
+4. `zanon_utils.ensure_min_cnt_z(cnt_struct, z)`.
+5. `fully_decent_publication_round(gw, cnt_struct, measurement_time)`.
+
+<ParamField path="network" type="Network" required>
+  The initialized `Network`; `network.l_gws` is iterated over each round.
+</ParamField>
+
+<ParamField path="t_start_offset" type="datetime.datetime" required>
+  Real-world datetime offset for wall-clock alignment.
+</ParamField>
+
+---
+
+### `fully_decent_collection_round`
+
+```python
+def fully_decent_collection_round(
+    self,
+    curr_gw: Gateway,
+    cnt_struct: CBloomFilter,
+    curr_time: datetime,
+) -> CBloomFilter
+```
+
+Single-GW collection: evicts records older than `delta_t`, polls all connected SMs, and merges their measurements into the local CBF. Increments `msg_cnt_gwgw += curr_gw.n_sm_conn * 2`.
+
+<ParamField path="curr_gw" type="Gateway" required>
+  The gateway performing local collection.
+</ParamField>
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The gateway's freshly created Counting Bloom Filter.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Current timestamp for delta-t eviction and record tagging.
+</ParamField>
+
+---
+
+### `fully_decent_publication_round`
+
+```python
+def fully_decent_publication_round(
+    self,
+    curr_gw: Gateway,
+    cnt_struct: CBloomFilter,
+    curr_time: datetime,
+) -> None
+```
+
+Publishes eligible tuples from the gateway's local record log. Sets `p_pub = 100` and calls `zanon_utils.publish_anonyimzed_tuples(curr_gw, cnt_struct, 100, curr_time)`. Increments `msg_cnt_gw_ce` by the number of tuples forwarded to the CE.
+
+<ParamField path="curr_gw" type="Gateway" required>
+  The publishing gateway.
+</ParamField>
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The z-enforced CBF used to validate which measurement hashes are publishable.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  Current timestamp passed through to the publication utility.
+</ParamField>

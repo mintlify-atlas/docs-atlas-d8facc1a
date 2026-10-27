@@ -1,0 +1,160 @@
+---
+title: "SmartMeter: Consumption Measurement Simulation"
+sidebarTitle: "SmartMeter"
+description: "Reference for the SmartMeter class, which simulates electricity consumption measurements for residential and commercial entities using standard German load profiles."
+---
+
+The `SmartMeter` class simulates a single electricity-consuming entity — a household, restaurant, bakery, or other commercial premises — and produces time-indexed consumption readings on demand. Each instance is assigned a consumer type drawn probabilistically from a `ProfileDistribution` at construction time, then loads the corresponding VDEW/BDEW Standard Load Profile (SLA) CSV file. When `measure_data` is called, it reads the normalized profile value for the current time slot, scales it to the entity's annual consumption, adds a small random noise component of up to 10% of the reading, and bins the result into a discretized hash key for privacy-preserving aggregation in the Counting Bloom Filter.
+
+## Constructor
+
+```python
+class SmartMeter:
+    def __init__(
+        self,
+        type_dist: ProfileDistribution,
+        sm_id: int,
+        gw_id: int,
+    ) -> None
+```
+
+<ParamField path="type_dist" type="ProfileDistribution" required>
+  A `ProfileDistribution` instance that encodes the weighted probability of each consumer type for the gateway's region and archetype. The SM's `type` is sampled from `type_dist.sm_sampleList` using `type_dist.sm_dist_weights`.
+</ParamField>
+
+<ParamField path="sm_id" type="int" required>
+  Sequential integer identifier for this SM within its gateway. Combined with `gw_id` to form the globally unique `id` string `"{gw_id}-{sm_id}"`.
+</ParamField>
+
+<ParamField path="gw_id" type="int" required>
+  ID of the parent gateway. Used as a namespace prefix in the composite `id`.
+</ParamField>
+
+### Instance Attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `id` | `str` | Composite identifier `"{gw_id}-{sm_id}"`. |
+| `gw` | `int` | Parent gateway ID (the `gw_id` passed at construction). |
+| `type` | `str` | Consumer type string sampled from the profile distribution (e.g. `"1p_household"`, `"bakery"`). |
+| `type_class` | consumer type instance | One of the consumer type class instances (e.g. `household_1p()`) that carries `sla_file` and `scaling_sla`. |
+| `sla_file` | `str` | Filename of the SLA CSV (accessed via `type_class.sla_file`), relative to `../../data/consumption_data/`. |
+| `scaling_sla` | `float` | Multiplicative factor that converts the normalized SLA value (based on 1,000 kWh/year) to the entity's actual annual consumption. Accessed via `type_class.scaling_sla`. |
+| `data` | `pd.DataFrame` | SLA profile loaded at construction; indexed by `datetime.time` objects (15-minute slots), with columns `w_5`, `w_6`, `w_0-4`, `s_5`, `s_6`, `s_0-4`, `i_5`, `i_6`, `i_0-4` for winter/summer/interim × Saturday/Sunday/weekday. |
+
+---
+
+## Methods
+
+### `measure_data`
+
+```python
+def measure_data(self, curr_time: datetime) -> tuple[int, int]
+```
+
+Returns a consumption reading and its discretized hash key for the given simulation timestamp.
+
+**Steps:**
+
+1. `choose_col_by_isotimestamp(curr_time)` — maps the timestamp's month and weekday to the correct SLA column (e.g. `"w_0-4"` for a winter weekday).
+2. Look up `self.data.loc[curr_time.time(), col_idx]` to retrieve the normalized consumption value.
+3. Scale: `consumption = int(value * self.type_class.scaling_sla)`.
+4. Add noise: `rnd_noise = random.randint(0, int(consumption / 10))`; `consumption += rnd_noise`.
+5. `map_measurement_to_key(consumption)` — bin the value into a discretized key.
+
+<ParamField path="curr_time" type="datetime.datetime" required>
+  The current simulation wall-clock time. Its `.time()` component selects the 15-minute slot row in the SLA profile, and its `.month` and `.weekday()` select the season/weekday column.
+</ParamField>
+
+**Returns:** `(consumption, m_key)` where `consumption` is the integer watt-hour reading after scaling and noise, and `m_key` is the binned integer key used in the Counting Bloom Filter.
+
+---
+
+## Consumer Types
+
+Each `SmartMeter` instance is assigned exactly one consumer type. The type determines both the SLA profile file and the annual consumption scaling factor. The table below lists all supported types as defined in `profile_distribution.py`.
+
+<Note>
+  All SLA CSV files are normalized to **1,000 kWh/year**. The `scaling_sla` attribute of each type class converts raw SLA values to the entity's actual annual consumption. For example, a single-person household has `scaling_sla = 2105 / 1000 = 2.105`, so every normalized SLA reading is multiplied by 2.105 before noise is added.
+</Note>
+
+| Type string | Class | Annual consumption | SLA file |
+|---|---|---|---|
+| `"1p_household"` | `household_1p` | 2,105 kWh/year | `SLA_h0_Haushalt.csv` |
+| `"2p_household"` | `household_2p` | 3,470 kWh/year | `SLA_h0_Haushalt.csv` |
+| `"3p_household"` / `"4p_household"` | `household_3p_more` | 5,047 kWh/year | `SLA_h0_Haushalt.csv` |
+| `"workshop"` | `bureau_workshop` | 6,000 kWh/year | `SLA_g1_bureaus_workshops.csv` |
+| `"restaurant"` | `restaurant` | 20,000 kWh/year | `SLA_g2_restaurants.csv` |
+| `"store"` | `store` | 17,000 kWh/year | `SLA_g4_store_hairdresser.csv` |
+| `"hair_dresser"` | `hair_dresser` | 7,500 kWh/year | `SLA_g4_store_hairdresser.csv` |
+| `"bakery"` | `bakery` | 25,000 kWh/year | `SLA_g5_bakery.csv` |
+
+### Consumer Type Classes
+
+Each consumer type is represented by a lightweight class in `profile_distribution.py` with three attributes: `consumption_p_a` (int, kWh/year), `scaling_sla` (float), and `sla_file` (str).
+
+```python
+class household_1p:
+    consumption_p_a = 2105
+    scaling_sla     = 2.105
+    sla_file        = "SLA_h0_Haushalt.csv"
+
+class household_2p:
+    consumption_p_a = 3470
+    scaling_sla     = 3.470
+    sla_file        = "SLA_h0_Haushalt.csv"
+
+class household_3p_more:   # also used for 4p_household
+    consumption_p_a = 5047
+    scaling_sla     = 5.047
+    sla_file        = "SLA_h0_Haushalt.csv"
+
+class bureau_workshop:
+    consumption_p_a = 6000
+    scaling_sla     = 6.0
+    sla_file        = "SLA_g1_bureaus_workshops.csv"
+
+class restaurant:
+    consumption_p_a = 20000
+    scaling_sla     = 20.0
+    sla_file        = "SLA_g2_restaurants.csv"
+
+class store:
+    consumption_p_a = 17000
+    scaling_sla     = 17.0
+    sla_file        = "SLA_g4_store_hairdresser.csv"
+
+class hair_dresser:
+    consumption_p_a = 7500
+    scaling_sla     = 7.5
+    sla_file        = "SLA_g4_store_hairdresser.csv"
+
+class bakery:
+    consumption_p_a = 25000
+    scaling_sla     = 25.0
+    sla_file        = "SLA_g5_bakery.csv"
+```
+
+---
+
+## Measurement Key Binning
+
+Raw consumption values are binned into discrete keys via `map_measurement_to_key` before being added to the CBF. This reduces the cardinality of the measurement space, making it easier for multiple SMs with slightly different readings to hash to the same key and thus accumulate sufficient counts to satisfy the z threshold.
+
+The binning algorithm uses exponentially growing groups: values up to 25 W use a group ceiling of 25; values above 25 are assigned to the smallest power-of-2 multiple of 25 that exceeds them. Within each group, the range is divided into 20 equal intervals and the value is rounded to the nearest interval boundary.
+
+```python
+def map_measurement_to_key(self, m: int) -> int:
+    if m < 0:
+        raise ValueError("Only consumption values > 0 allowed")
+    group_max = 25
+    if m > group_max:
+        group_max = self.find_m_group(m, group_max)
+    group_interval = int(group_max / 20)
+    r = m % group_interval
+    if r < group_interval / 2:
+        key = m - r
+    else:
+        key = m + (group_interval - r)
+    return key
+```

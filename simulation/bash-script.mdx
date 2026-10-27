@@ -1,0 +1,167 @@
+---
+title: "Batch Simulation with the Shell Script"
+sidebarTitle: "Batch Script"
+description: "Use run_zanon_simu.sh to automate deZent simulations across all parameter combinations. Adapt paths and split across multiple scripts for parallel execution."
+---
+
+Running all 480 parameter combinations from the deZent paper evaluation by hand would be impractical. The `scripts/run_zanon_simu.sh` script automates this by iterating over every combination of gateway count, maximum SM count, z-anonymity threshold, and random seed using nested loops, invoking `python3 main.py` once per combination.
+
+<Warning>
+  Running all 480 combinations sequentially takes a **very long time**. It is strongly recommended to split the parameter ranges across multiple bash scripts and run them simultaneously on separate CPU cores or machines. See the [Splitting for Parallel Execution](#splitting-for-parallel-execution) section below.
+</Warning>
+
+---
+
+## Script Contents
+
+The full script is reproduced here. Before running it, you must update the `cd` path to point to the `deZent/src/` directory on your system.
+
+```bash
+#!/bin/bash
+#!/change/home/path/to/python/ python3
+
+echo "set parameters"
+
+l_n_gw=(5 25 50 100 250 500 1000 1500)
+l_n_max_sm=(20)
+l_z=(0 5 10 25 50 100)
+l_seed=(1 2 3 4 5 6 7 8 9 10)
+cd /change/path/to/deZent/src/
+
+echo "start bash script now"
+
+### all users simulation for centralized scenario
+for z in "${l_z[@]}"
+do
+    for n_gw in "${l_n_gw[@]}"
+    do
+        for n_max_sm in "${l_n_max_sm[@]}"
+        do
+            for seed in "${l_seed[@]}"
+            do
+                echo $z
+                echo $n_gw
+                echo $n_max_sm
+                echo $seed
+                python3 main.py $n_gw $n_max_sm $z $seed
+            done
+        done
+    done
+done
+
+echo "finished successfully"
+```
+
+---
+
+## Default Parameter Arrays
+
+| Variable | Values | Count |
+|----------|--------|-------|
+| `l_n_gw` | 5, 25, 50, 100, 250, 500, 1000, 1500 | 8 |
+| `l_n_max_sm` | 20 | 1 |
+| `l_z` | 0, 5, 10, 25, 50, 100 | 6 |
+| `l_seed` | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 | 10 |
+| **Total runs** | 8 × 1 × 6 × 10 | **480** |
+
+Each run produces three scenarios (deZent ring-coordinated, centralized, fully decentralized) and writes six CSV files — so the full evaluation generates **2,880 output files** in total.
+
+---
+
+## Steps to Use
+
+<Steps>
+  <Step title="Copy the script to a convenient location">
+    The script is located at `scripts/run_zanon_simu.sh`. You can run it from there or copy it next to your data directories.
+
+    ```bash
+    cp scripts/run_zanon_simu.sh .
+    ```
+  </Step>
+
+  <Step title="Update the working directory path">
+    Open the script and replace the placeholder path in the `cd` command with the absolute path to `deZent/src/` on your system:
+
+    ```bash
+    # Before
+    cd /change/path/to/deZent/src/
+
+    # After (example)
+    cd /home/user/projects/deZent-local_zanon/deZent/src/
+    ```
+  </Step>
+
+  <Step title="Optionally update the interpreter line">
+    If your Python 3 binary is not on the default `PATH` as `python3`, update the shebang comment at line 2 of the script to point to the correct interpreter path.
+  </Step>
+
+  <Step title="Make the script executable">
+    ```bash
+    chmod +x run_zanon_simu.sh
+    ```
+  </Step>
+
+  <Step title="Run the script">
+    ```bash
+    ./run_zanon_simu.sh
+    ```
+
+    The script will print the current parameter values before each `main.py` invocation and print `finished successfully` when all combinations are complete.
+  </Step>
+</Steps>
+
+---
+
+## Splitting for Parallel Execution
+
+<Tip>
+  The simplest way to parallelize is to partition the `l_z` array across separate scripts, since `z` is the outermost loop and each z-value set is independent of the others. For example, create two scripts that together cover all six z-values:
+</Tip>
+
+**Script A** — low z-values (z = 0 and z = 5):
+
+```bash
+#!/bin/bash
+l_n_gw=(5 25 50 100 250 500 1000 1500)
+l_n_max_sm=(20)
+l_z=(0 5)
+l_seed=(1 2 3 4 5 6 7 8 9 10)
+cd /path/to/deZent/src/
+
+for z in "${l_z[@]}"; do
+    for n_gw in "${l_n_gw[@]}"; do
+        for n_max_sm in "${l_n_max_sm[@]}"; do
+            for seed in "${l_seed[@]}"; do
+                python3 main.py $n_gw $n_max_sm $z $seed
+            done
+        done
+    done
+done
+```
+
+**Script B** — high z-values (z = 10, 25, 50, 100):
+
+```bash
+#!/bin/bash
+l_n_gw=(5 25 50 100 250 500 1000 1500)
+l_n_max_sm=(20)
+l_z=(10 25 50 100)
+l_seed=(1 2 3 4 5 6 7 8 9 10)
+cd /path/to/deZent/src/
+
+for z in "${l_z[@]}"; do
+    for n_gw in "${l_n_gw[@]}"; do
+        for n_max_sm in "${l_n_max_sm[@]}"; do
+            for seed in "${l_seed[@]}"; do
+                python3 main.py $n_gw $n_max_sm $z $seed
+            done
+        done
+    done
+done
+```
+
+Launch both scripts in separate terminal sessions (or with `&` for background execution) to process the two z-value groups concurrently. You can split even more finely — for example, one script per z-value — if you have more CPU cores available.
+
+<Note>
+  Because each `main.py` run writes output files with unique names derived from the parameter values, there is no risk of file collisions when multiple scripts run simultaneously.
+</Note>

@@ -1,72 +1,90 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "deZent",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#ffffff",
+    "light": "#b42324",
+    "dark": "#b46c6c"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
+  "favicon": "https://media.brand.dev/861afcf7-5fda-417f-9535-70f50615eef9.png",
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "light": "https://media.brand.dev/423dd5fc-7ee3-4622-b8fd-faff228ee0e0.svg",
+    "dark": "https://media.brand.dev/423dd5fc-7ee3-4622-b8fd-faff228ee0e0.svg"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:support@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/carolin-brunn/deZent-local_zanon"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/carolin-brunn/deZent-local_zanon"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/z-anonymity",
+              "concepts/network-architecture",
+              "concepts/anonymization-scenarios"
+            ]
+          },
+          {
+            "group": "Running Simulations",
+            "pages": [
+              "simulation/configuration",
+              "simulation/dezent-simulation",
+              "simulation/jha-simulation",
+              "simulation/bash-script"
+            ]
+          },
+          {
+            "group": "Analysis & Validation",
+            "pages": [
+              "analysis/model-validation",
+              "analysis/simulation-stats",
+              "analysis/data-output"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Core Modules",
+            "pages": [
+              "reference/zanon",
+              "reference/network",
+              "reference/gateway",
+              "reference/smartmeter",
+              "reference/counting-bloom-filter"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "reference/zanon-utils",
+              "reference/profile-distribution",
+              "reference/logging-utils"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

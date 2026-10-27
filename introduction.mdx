@@ -1,0 +1,75 @@
+---
+title: "deZent: Decentralized Z-Anonymity for Smart Metering"
+sidebarTitle: "Introduction"
+description: "deZent implements decentralized z-anonymity for smart meter networks using ring-topology gateway coordination and Counting Bloom Filters to protect energy consumption privacy."
+---
+
+deZent is a research simulation framework for privacy-preserving smart metering, published on [arXiv (2603.08854)](https://arxiv.org/abs/2603.08854). It demonstrates how z-anonymity — a technique that prevents re-identification by ensuring any published data point could originate from at least *z* distinct sources — can be achieved across a distributed network of gateways with minimal inter-node coordination, removing the need for a fully trusted central authority.
+
+## The Problem: Smart Metering and Privacy
+
+Modern smart meters report energy consumption at regular 15-minute intervals. While fine-grained measurement data is valuable for grid management, it also creates serious privacy risks: consumption patterns can reveal a household's daily schedule, occupancy state, appliance usage, and even socio-economic status. Before measurements can be published or shared with third parties, they must be anonymized so that individual consumers cannot be re-identified.
+
+Z-anonymity addresses this by guaranteeing that any published consumption value has been observed by at least *z* distinct smart meters within a recent time window (delta-t). A data point that appears only once — or from only one household — is withheld until enough matching observations have accumulated, or discarded entirely.
+
+## The Key Innovation: Ring-Topology Decentralization
+
+Prior work by Jha et al. (DOI: [10.1109/BigData50022.2020.9378422](https://doi.org/10.1109/BigData50022.2020.9378422)) established centralized z-anonymity, where a single trusted central entity aggregates all measurements and enforces the z threshold. While effective, this design concentrates sensitive data at one node, making it a high-value attack target and a privacy bottleneck.
+
+deZent distributes this responsibility across a ring of gateways (GWs). Each gateway knows only its immediate predecessor and successor in the ring. Anonymization proceeds through two coordinated ring traversals per measurement cycle:
+
+1. **Collection round** — a coordinating gateway initiates a pass around the ring, gathering hashed measurement values from each node's smart meters into a shared Counting Bloom Filter (CBF) without exposing plaintext readings.
+2. **Publication round** — the ring is traversed again; each gateway publishes any anonymized data points whose count in the CBF meets or exceeds the z threshold.
+
+The coordinating role rotates to the next gateway each cycle, distributing trust. The central entity (CE) only ever receives already-anonymized output — it never sees raw or intermediate measurements.
+
+<Note>
+  The use of Counting Bloom Filters means individual measurement values are never transmitted in plaintext between gateways. The probabilistic count structure provides privacy by design during the ring-coordination phase.
+</Note>
+
+## Relationship to the Jha et al. Baseline
+
+deZent is built on top of — and benchmarked against — the centralized z-anonymity scheme by Jha et al. After running the deZent simulation, you can execute the Jha baseline using the log files written during simulation (`data/log_data/deZent/`). Model validation scripts compare publication ratios and published data point counts between the two implementations to confirm correctness of the deZent approach.
+
+## What's in the Repository
+
+The repository provides everything needed to fully reproduce the results reported in the arXiv paper. No proprietary data or external services are required.
+
+| Component | Description |
+|---|---|
+| `deZent/src/` | Core simulation source code (SimPy-based) |
+| `deZent/profile_distribution.py` | Consumer profile statistics based on real Berlin district data |
+| `data/anonymized_data/deZent/` | Output CSVs written by the simulation |
+| `data/log_data/deZent/` | Full simulation logs for each scenario |
+| `jha_cent_zanon/` | Jha et al. centralized baseline implementation |
+| `data_analysis/` | Scripts for computing and extracting evaluation statistics |
+| `scripts/` | Bash script to batch-run all parameter combinations |
+
+## Three Simulation Scenarios
+
+Every run of `main.py` executes all three scenarios back-to-back on the same virtual network, producing separate output files for each:
+
+- **deZent** (`decent_w_comm`) — ring-coordinated decentralized z-anonymity with Counting Bloom Filters. Gateways exchange a compact count structure around the ring, minimizing the information shared between nodes.
+- **Centralized** (`cent_w_comm`) — a central entity collects raw measurements from all gateways, builds a global count structure, enforces z, and publishes anonymized results. Used as the accuracy reference.
+- **Fully decentralized without coordination** (`fully_decent_wo_coord`) — each gateway independently enforces z-anonymity using only its own locally connected smart meters, with no communication between gateways. This lower bound shows the cost of eliminating all coordination.
+
+<Warning>
+  Simulating all parameter combinations (varying number of gateways, smart meters, z values, and random seeds) can take a significant amount of time. See the [Quickstart](/quickstart) guide for instructions on using the provided bash script or splitting runs across multiple files.
+</Warning>
+
+## Explore the Documentation
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install dependencies, set up your environment, and run your first simulation in under five minutes.
+  </Card>
+  <Card title="Concepts" icon="book-open" href="/concepts">
+    Deep-dive into z-anonymity, Counting Bloom Filters, the ring-coordination protocol, and simulation parameters.
+  </Card>
+  <Card title="Simulation" icon="play" href="/simulation">
+    Learn how to configure scenarios, interpret output files, run the Jha baseline, and validate results.
+  </Card>
+  <Card title="Reference" icon="code" href="/reference">
+    Full API and CLI reference for `main.py`, `zanon.py`, network components, and data analysis scripts.
+  </Card>
+</CardGroup>

@@ -1,0 +1,178 @@
+---
+title: "What Is Z-Anonymity in Smart Metering?"
+sidebarTitle: "Z-Anonymity"
+description: "Z-anonymity prevents re-identification of smart meter readings by ensuring each published value was observed by at least z distinct individuals within a time window."
+---
+
+Smart meters report electricity consumption in 15-minute intervals — fine-grained enough to reveal when a household wakes up, leaves for work, returns home, or runs appliances. Left unprotected, that stream of measurements constitutes a detailed fingerprint of daily life. Z-anonymity is the privacy mechanism deZent uses to prevent re-identification: a measurement value is only forwarded to the public data stream if it was independently observed by at least **z distinct individuals** within a sliding time window.
+
+## The Privacy Problem
+
+Regular energy consumption data is surprisingly revealing. Research has shown that 15-minute interval readings can expose:
+
+- **Daily schedules** — wake-up and sleep times, meal preparation, commuting patterns
+- **Occupancy patterns** — whether a property is occupied, how many residents, and their routines
+- **Socio-economic status** — appliance ownership, heating behavior, economic activity
+
+Publishing raw smart meter readings directly to a central entity creates a single point that, if compromised or subpoenaed, puts all consumers at risk. Even aggregate queries can be de-anonymized when only a handful of meters contribute to each reported value. deZent addresses this by withholding any measurement value that has not been corroborated by a sufficient number of independent observers.
+
+## Defining Z-Anonymity
+
+<Note>
+  Z-anonymity was originally introduced in a centralized form by Jha et al. (DOI: [10.1109/BigData50022.2020.9378422](https://doi.org/10.1109/BigData50022.2020.9378422)). deZent extends this concept to a decentralized gateway ring, preserving the same privacy guarantee without requiring a trusted central collector.
+</Note>
+
+A measurement **value** `v` satisfies z-anonymity at time `t` if and only if:
+
+```
+count(v, t, delta_t) >= z
+```
+
+where `count(v, t, delta_t)` is the number of **distinct smart meters** that reported value `v` within the anonymization window `[t − delta_t, t]`. Only values that clear this threshold are published; all others are silently suppressed.
+
+The key properties that distinguish z-anonymity from simpler thresholding approaches are:
+
+1. **Value-level, not record-level** — suppression operates on the measurement value (or value bucket), not on individual records. Multiple meters can still have their readings published so long as the value is common enough.
+2. **Time-windowed** — the count is computed only over recent observations. Stale data is evicted when it ages beyond `delta_t`.
+3. **Individual-level diversity** — the z counter counts distinct smart meter IDs, not raw occurrence frequency, preventing a single device from artificially inflating a count.
+
+## The Anonymization Window δt
+
+The anonymization window `delta_t` (Greek letter delta-t, often written `δt`) controls how far back in time the z-counter looks. In deZent, the default is **121 minutes (7,260 seconds)**, set in `main.py`:
+
+```python
+delta_t = 121  # [minutes]
+```
+
+This is converted to a `datetime.timedelta` inside the `zAnon` class:
+
+```python
+# zanon.py
+class zAnon():
+    def __init__(self, env, dt_minutes, z):
+        self.delta_t = datetime.timedelta(minutes=dt_minutes)  # timedelta
+        self.measurement_frequency = datetime.timedelta(minutes=15)
+        self.n_cycles_for_anon = max(1, self.delta_t.seconds / self.measurement_frequency.seconds)
+```
+
+`n_cycles_for_anon` tells the system how many 15-minute measurement rounds fit inside `delta_t` — for the default window this is `7260 / 900 = ~8.07`, rounded to **8 cycles**. This figure is used to size the Counting Bloom Filter so that it can hold all expected measurement hashes from the entire window.
+
+Eviction of stale records is performed by `apply_deltat_to_records` in `zanon_utils.py`:
+
+```python
+def apply_deltat_to_records(record_log, curr_time, dt):
+    t_limit = curr_time - dt  # oldest allowed timestamp
+
+    for record_val in list(record_log.log.keys()):
+        for sm_id, log_entry in list(record_log.log[record_val].items()):
+            if log_entry.time < t_limit:
+                del record_log.log[record_val][sm_id]
+        if not record_log.log[record_val]:
+            del record_log.log[record_val]
+
+    return record_log
+```
+
+Any entry whose timestamp is older than `curr_time − delta_t` is removed before the z-threshold is applied, ensuring the count always reflects a sliding window of recent activity.
+
+## The Z Parameter
+
+The integer parameter `z` is the minimum number of distinct observers required for publication. It is the core privacy knob:
+
+<CardGroup cols={2}>
+  <Card title="Higher z = Stronger Privacy" icon="shield">
+    More distinct observers are required before a value is published. Rarer consumption patterns are suppressed more aggressively, making re-identification harder.
+  </Card>
+  <Card title="Lower z = Higher Publication Rate" icon="chart-bar">
+    Fewer observers are needed. More values are published, giving analysts a richer data set, but offering weaker anonymity guarantees.
+  </Card>
+</CardGroup>
+
+The z-threshold is enforced in deZent by subtracting `z − 1` from every counter in the Counting Bloom Filter, then discarding entries that fall to zero or below:
+
+```python
+# zanon_utils.py
+def ensure_min_cnt_z(cnt_struct, z):
+    cnt_struct.subtract_constant((z - 1))
+    return cnt_struct
+```
+
+After this operation, only hashes with an original count `>= z` survive in the filter. Values whose hash was removed will not match any publication check.
+
+### Special Values
+
+| z value | Meaning | Behavior |
+|---------|---------|----------|
+| `z = 0` | No threshold | All values pass (no anonymization guard); equivalent to disabling z-anonymity |
+| `z = 1` | Publish all | Every measured value is eligible; no suppression based on co-occurrence |
+| `z = 2` | Minimum real anonymity | A value must be seen by at least one other individual |
+| `z = 5` | Moderate privacy | Requires five independent observers; common household patterns still pass |
+| `z = 10+` | Strong privacy | Only very common consumption values are published; significant data loss |
+
+### Publication Ratio vs. z
+
+| z Value | Privacy Protection Level | Expected Publication Ratio Effect |
+|---------|--------------------------|-----------------------------------|
+| 1 | None — all data published | 100% (full publication) |
+| 2 | Minimal | High — only singletons suppressed |
+| 5 | Moderate | Medium — rare usage patterns suppressed |
+| 10 | Strong | Low — only highly common values published |
+| 20 | Very strong | Very low — most readings suppressed |
+| 50+ | Extreme | Minimal data published |
+
+## Contrasting Z-Anonymity with K-Anonymity
+
+Z-anonymity and k-anonymity share the intuition that individuals should "blend into a crowd," but they operate on fundamentally different objects:
+
+<CardGroup cols={2}>
+  <Card title="K-Anonymity" icon="users">
+    **Operates on records.** Each released record must be indistinguishable from at least k−1 other records across a set of quasi-identifier attributes. Requires generalizing or suppressing individual fields (e.g., rounding an age, widening a ZIP code).
+  </Card>
+  <Card title="Z-Anonymity" icon="wave-square">
+    **Operates on values.** A measurement value (or value bucket) is only published if it was reported by at least z distinct meters within the time window. No record-level generalization is needed; suppression is binary at the value level.
+  </Card>
+</CardGroup>
+
+In the smart metering context, k-anonymity would require grouping meter readings into clusters of at least k records and releasing only aggregate or generalized versions — a significant information loss. Z-anonymity instead asks: "did enough other meters see the same value?" If yes, the exact value (within the measurement bucket) is published without modification.
+
+## Counting Bloom Filters in deZent
+
+<Note>
+  In deZent, z-anonymity is enforced using **Counting Bloom Filters (CBFs)** rather than exact counters. A CBF is a probabilistic data structure that supports approximate membership counting with a configurable false-positive rate. This means the privacy guarantee is probabilistic: a very small fraction of values may be published that did not actually reach z distinct observers (false positives), and — because the standard CBF does not produce false negatives — no eligible value is incorrectly suppressed. The false-positive rate `P` is set to **0.05** (5%) in the default configuration.
+</Note>
+
+The CBF is created in `zanon_utils.create_cnt_structure` with parameters derived from the number of smart meters, the anonymization window, and the target false-positive rate:
+
+```python
+# zanon_utils.py
+def create_cnt_structure(n_sm_conn, anon_cycles, struct_type):
+    match struct_type:
+        case "bloom":
+            n = 10 * n_sm_conn * anon_cycles   # expected number of items
+            N = 20                              # bits per counter (2^20 max count)
+            P = 0.05                            # target false-positive rate
+            m_est = int((-n * np.log(P)) / (np.log(2) ** 2))  # number of buckets
+            k_est = int((m_est / n) * np.log(2))               # number of hash functions
+            k = max(1, min(k_est, 6))          # clamp to [1, 6]
+            cnt_struct = CBloomFilter(n, N, m_est, k)
+    return cnt_struct
+```
+
+Using a CBF instead of an exact counter has two important consequences for the network architecture:
+
+1. **Privacy of the filter itself** — GWs pass the CBF around the ring and add measurement hashes to it. A receiving GW sees only bucket counts, not the raw values hashed into those buckets. No GW can infer another GW's raw meter readings from the CBF alone.
+2. **Compact coordination messages** — the CBF is fixed-size regardless of how many distinct values have been inserted, keeping ring-coordination messages bounded.
+
+The coordinator adds a random noise element before passing the CBF around the ring, and removes it after the ring traversal completes, preventing external observers from inferring which specific values are present based on bucket-count changes:
+
+```python
+# gateway.py
+def add_initial_noise_to_cnt_struct(self, cnt_struct):
+    self.coord_noise = random.randint(20, 30)
+    cnt_struct.add(self.coord_noise)
+    return cnt_struct
+
+def remove_initial_noise_from_cnt_struct(self, cnt_struct):
+    cnt_struct.remove(self.coord_noise)
+    return cnt_struct
+```

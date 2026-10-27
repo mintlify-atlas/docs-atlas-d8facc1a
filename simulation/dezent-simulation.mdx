@@ -1,0 +1,139 @@
+---
+title: "Running the deZent Simulation"
+sidebarTitle: "deZent Run"
+description: "Run deZent's three z-anonymity simulation scenarios — ring-coordinated, centralized, and fully decentralized — from the deZent/src/ directory with a single main.py call."
+---
+
+A single invocation of `main.py` executes all three deZent scenarios back-to-back on the same simulated network and writes six output CSV files to disk — two per scenario. The three scenarios cover the full spectrum of coordination strategies: deZent's ring-coordinated approach, a traditional centralized baseline, and a fully decentralized reference with no inter-GW coordination.
+
+<Warning>
+  The network topology (GW ring, SM assignments) is created once and **shared across all three scenarios** in a single run. Logs are cleared between scenarios, but the underlying network structure is identical for all three. If you need truly independent network topologies for each scenario, run `main.py` three separate times with different seeds.
+</Warning>
+
+## Step-by-Step Guide
+
+<Steps>
+  <Step title="Navigate to the source directory">
+    All imports in `main.py` use relative paths, so the script must be executed from within the `deZent/src/` directory.
+
+    ```bash
+    cd deZent/src/
+    ```
+  </Step>
+
+  <Step title="Run the simulation">
+    Invoke `main.py` with the four required positional arguments in order: gateway count, max smart meters per gateway, z-anonymity threshold, and random seed.
+
+    ```bash
+    python3 main.py <n_gw> <n_max_sm> <z> <seed>
+    ```
+
+    **Concrete example** — 5 gateways, up to 20 SMs per GW, z-threshold of 1, seed 1:
+
+    ```bash
+    python3 main.py 5 20 1 1
+    ```
+
+    See [Configuration Parameters](/simulation/configuration) for a full description of each argument.
+  </Step>
+
+  <Step title="Wait for all three scenarios to complete">
+    `main.py` runs three sequential SimPy environments on the same network. Each environment simulates 1,440 minutes (one full day) at a 15-minute measurement frequency, producing 96 collection-and-publication rounds per scenario. Progress is reported via print statements to stdout.
+  </Step>
+
+  <Step title="Collect output files">
+    After the run completes, six CSV files are written — one anonymized log and one simulation log per scenario — to:
+
+    - **Anonymized data:** `data/anonymized_data/deZent/`
+    - **Simulation logs:** `data/log_data/deZent/`
+
+    Filenames encode all run parameters; see [Configuration Parameters](/simulation/configuration#output-file-naming-convention) for the full naming convention.
+  </Step>
+</Steps>
+
+---
+
+## What Happens During a Run
+
+`main.py` executes the following sequence internally:
+
+1. **Network initialisation** — `n_gw` gateways are instantiated with random IDs drawn from `[0, 3 × n_gw)`. The GWs are connected into a sorted bidirectional ring, and each GW has SMs attached according to a truncated normal distribution (mean = `n_max_sm / 2`, sd = 2).
+
+2. **deZent (ring-coordinated) scenario** — A SimPy environment runs `decent_zanon_w_comm()`. Each of the 96 rounds consists of a ring-wide collection round (each GW adds its SMs' measurements to a shared Counting Bloom Filter, forwarding it around the ring) followed by one or two publication rounds (each GW checks the filter and publishes qualifying tuples to the Central Entity).
+
+3. **Logs cleared** — `clear_network_logs()` resets all `RecordLog`, `PubLog`, and `SimuLog` objects on the Central Entity and all GWs, so the centralized scenario starts with a clean slate.
+
+4. **Centralized scenario** — A new SimPy environment runs `central_zanon_w_cnt_struct()`. The Central Entity directly triggers each GW to collect measurements, aggregates all data centrally, and publishes tuples that exceed the z-threshold.
+
+5. **Logs cleared again** — Another `clear_network_logs()` call resets state for the third scenario.
+
+6. **Fully decentralized scenario** — A final SimPy environment runs `fully_decent_zanon_wo_coord()`. Each GW operates entirely independently: it collects its own SMs' measurements, applies the z-threshold locally, and publishes qualifying tuples — without consulting any other GW or using a ring structure.
+
+7. **All six CSVs written to disk** — Anonymized publication logs and complete simulation logs for each scenario are saved. Summary statistics (published tuple counts, message counts) are printed to stdout.
+
+---
+
+## Output File Format
+
+### Anonymized Data CSV
+
+The published-data CSV contains one row per published measurement tuple. The **first two rows** are not data rows — they are message-count headers embedded in the column index:
+
+| Row | Content |
+|-----|---------|
+| Row 0 | `msg_count_gwgw` — total GW-to-GW messages exchanged during the scenario |
+| Row 1 | `msg_cnt_gw_ce` — total GW-to-Central-Entity messages exchanged |
+| Row 2+ | Published measurement tuples |
+
+Data columns include (at minimum): `time`, `ID`, `value`, and `type` — representing the measurement timestamp, the anonymized smart meter identifier, the consumption category value, and the data type respectively.
+
+### Simulation Log CSV
+
+The simulation log (`simu_log_*.csv`) records **every measurement tuple** that occurred during the simulation — including those that were suppressed by the z-anonymity filter and never published. This file is used downstream by the Jha baseline comparison to compute publication ratios. Its schema matches the anonymized data CSV but without the message-count header rows.
+
+---
+
+## Expected Console Output
+
+A successful run with `python3 main.py 5 20 1 1` produces output similar to the following:
+
+```text
+['main.py', '5', '20', '1', '1']
+__create nw__: created network instance
+__init nw__: start init
+__init nw__: created GW ring structure
+__decent_wc_zanonymize__: start run
+__SIMULATION END__
+Decentral MSG CNT GWGW:  <count>
+Decentral MSG CNT GWCE:  <count>
+__central_zanonymize w cnt_struct__: start run
+Central MSG CNT GWGW:  <count>
+Central MSG CNT GWCE:  <count>
+__decent_wc_zanonymize__: start run
+Fully Decentral MSG CNT GWGW:  <count>
+Fully Decentral MSG CNT GWCE:  <count>
+Rounds:  96
+Total # SMs in network:  <total>
+######################################################################
+Fully decentral total tuples:  <count>
+Fully decentral published tuples:  <count>
+...
+######################################################################
+Central total tuples:  <count>
+Central published tuples:  <count>
+...
+######################################################################
+Decentral total tuples:  <count>
+Decentral published tuples:  <count>
+...
+```
+
+<Note>
+  The `Rounds: 96` line confirms that `simu_runtime (1440) / measurement_frequency (15) = 96` collection-and-publication rounds were executed per scenario.
+</Note>
+
+---
+
+## Running Multiple Parameter Combinations
+
+For large-scale evaluations across many parameter combinations, use the provided shell script instead of invoking `main.py` manually for each combination. See [Batch Simulation with the Shell Script](/simulation/bash-script) for details.

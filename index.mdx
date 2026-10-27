@@ -1,20 +1,61 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "deZent: Decentralized Local Z-Anonymity for Smart Metering"
+sidebarTitle: "Home"
+description: "deZent is a Python simulation framework for privacy-preserving smart metering, implementing decentralized z-anonymity with minimal gateway coordination in ring-topology networks."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+deZent is the research simulation framework accompanying the arXiv paper on decentralized local z-anonymity. It models privacy-preserving publication of smart metering data across a virtual network of gateways — each managing several smart meters — without requiring a fully centralized authority. By introducing minimal ring-based coordination between gateways, deZent achieves anonymization quality comparable to centralized approaches while improving privacy guarantees.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn what deZent does, how it relates to centralized z-anonymity, and when to use each scenario.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install dependencies, set up a virtual environment, and run your first simulation in minutes.
+  </Card>
+  <Card title="Concepts" icon="lightbulb" href="/concepts/z-anonymity">
+    Understand z-anonymity, the ring network architecture, and the three anonymization scenarios.
+  </Card>
+  <Card title="Running Simulations" icon="play" href="/simulation/configuration">
+    Configure parameters, run deZent and Jha simulations, and use the batch shell script.
+  </Card>
+  <Card title="Analysis & Validation" icon="chart-bar" href="/analysis/model-validation">
+    Validate the model against the Jha baseline and compute publication ratio statistics.
+  </Card>
+  <Card title="Reference" icon="code" href="/reference/zanon">
+    API-level documentation for every module: zAnon, Network, Gateway, CBloomFilter, and more.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## How deZent Works
+
+deZent simulates a sensor network where gateways (GWs) forward smart meter (SM) consumption measurements to a central entity for publication. Raw measurements can reveal sensitive personal information — daily schedules, socio-economic status — so z-anonymity is applied before any data is published.
+
+<Steps>
+  <Step title="Build the virtual network">
+    A configurable number of gateways are created, each connected to a set of smart meters drawn from a realistic Berlin district profile distribution. Gateways are arranged in a ring topology.
+  </Step>
+  <Step title="Collect measurements each round">
+    Every 15 minutes, smart meters report consumption values. Gateways accumulate these into a Counting Bloom Filter, which tracks how many distinct individuals share each measurement value.
+  </Step>
+  <Step title="Enforce z-anonymity">
+    Only measurement values observed at least **z** times within the anonymization window (delta_t) are eligible for publication. The Counting Bloom Filter is used to enforce this threshold without revealing individual values.
+  </Step>
+  <Step title="Publish anonymized data">
+    Eligible tuples are forwarded to the central entity. The deZent scenario uses ring-based GW coordination to distribute this decision, reducing trust requirements on any single node.
+  </Step>
+</Steps>
+
+## Three Simulation Scenarios
+
+deZent ships three simulation modes in a single run, allowing direct comparison of privacy and communication overhead:
+
+| Scenario | Description | Coordination |
+|---|---|---|
+| **deZent** | Decentralized with GW ring coordination | Ring-based, minimal |
+| **Centralized** | Central entity collects all data before anonymizing | Full central trust |
+| **Fully Decentralized** | Each GW acts independently, no inter-GW coordination | None |
+
+<Note>
+  The arXiv paper (https://arxiv.org/abs/2603.08854) provides full theoretical analysis and evaluation results for all three scenarios. All paper results are reproducible using the data and scripts in this repository.
+</Note>

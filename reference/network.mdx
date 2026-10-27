@@ -1,0 +1,124 @@
+---
+title: "Network: Virtual Gateway Ring Initialization"
+sidebarTitle: "Network"
+description: "Reference for the Network class, which builds the simulated ring topology of gateways and smart meters used in all three deZent simulation scenarios."
+---
+
+The `Network` class is responsible for assembling the virtual smart metering network that all three deZent simulation scenarios operate over. It creates a Central Entity, spawns a configurable number of `Gateway` instances with randomly assigned IDs and SM counts, links them into a sorted doubly-linked ring, and connects each gateway to its `SmartMeter` instances. Once `init_network` returns, the network is fully wired and ready to be passed to any `zAnon` scenario generator.
+
+## Constructor
+
+```python
+class Network:
+    def __init__(self, n_gws: int) -> None
+```
+
+<ParamField path="n_gws" type="int" required>
+  Number of gateways to create in the network. This value determines the ring size and the initial ID pool.
+</ParamField>
+
+### Instance Attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `ce` | `CentralEntity` \| `None` | Central Entity instance created during `init_network`. `None` before initialization. |
+| `n_gws` | `int` | Number of gateways in the network, as passed to the constructor. |
+| `l_gws` | `list[Gateway]` | Ordered list of all `Gateway` instances added during `open_gws`. |
+| `l_free_gw_ids` | `set[int]` | Pool of available integer IDs of size `3 * n_gws`, drawn from `numpy.arange(0, 3 * n_gws)`. IDs are removed from this set as gateways are created. |
+
+---
+
+## Methods
+
+### `init_network`
+
+```python
+def init_network(self, dist_num_sms: str, max_n_sms_at_gw: int) -> None
+```
+
+Top-level initialization entry point. Calls the three setup steps in order:
+
+1. Creates the `CentralEntity` and assigns it to `self.ce`.
+2. `open_gws(dist_num_sms, max_n_sms_at_gw)` — instantiates all gateways.
+3. `create_gw_ring()` — links gateways into a sorted doubly-linked ring.
+4. `add_sms_to_gw()` — connects SmartMeter instances to each gateway.
+
+<ParamField path="dist_num_sms" type="str" required>
+  Statistical distribution used to determine how many smart meters each gateway manages. Supported values: `"normal"` or `"uniform"`. See `get_n_sm` for details.
+</ParamField>
+
+<ParamField path="max_n_sms_at_gw" type="int" required>
+  Upper bound on the number of smart meters that any single gateway can manage. Acts as the `max_n_sms` parameter in the chosen distribution.
+</ParamField>
+
+---
+
+### `open_gws`
+
+```python
+def open_gws(self, dist_num_sms: str, max_n_sms: int) -> None
+```
+
+Creates `n_gws` `Gateway` instances, each with a randomly sampled unique ID (via `get_gw_id`) and a SM count drawn from the specified distribution (via `get_n_sm`). Appends each new `Gateway` to `self.l_gws`.
+
+<ParamField path="dist_num_sms" type="str" required>
+  Distribution type for SM count sampling; forwarded directly to `get_n_sm`.
+</ParamField>
+
+<ParamField path="max_n_sms" type="int" required>
+  Maximum SM count; forwarded directly to `get_n_sm`.
+</ParamField>
+
+---
+
+### `get_n_sm`
+
+```python
+def get_n_sm(self, distribution: str, max_n_sms: int) -> int
+```
+
+Samples a smart meter count for one gateway from the requested distribution.
+
+<ParamField path="distribution" type="str" required>
+  Distribution name. One of:
+
+  - `"normal"` — truncated normal distribution with `mean = max_n_sms / 2`, `sd = 2`, bounds `[0, max_n_sms]`. If the sampled value is less than 1, it is clamped to 1.
+  - `"uniform"` — uniform distribution over the integer range `[1, max_n_sms)`.
+
+  Any other string raises a `ValueError`.
+</ParamField>
+
+<ParamField path="max_n_sms" type="int" required>
+  Upper bound passed to the distribution. For `"normal"` this is also twice the mean.
+</ParamField>
+
+**Returns:** `int` — the sampled SM count, guaranteed to be at least 1.
+
+**Raises:** `ValueError` if `distribution` is not `"normal"` or `"uniform"`.
+
+---
+
+### `create_gw_ring`
+
+```python
+def create_gw_ring(self) -> None
+```
+
+Connects all gateways in `l_gws` into a **sorted doubly-linked ring** ordered by gateway ID. The first gateway in `l_gws` is inserted as a self-loop (`gw_pred = gw_suc = self`), establishing the ring entry point. Each subsequent gateway is inserted using a directional search:
+
+- If the new gateway's ID is **greater** than the entry gateway's ID, `increasing_search` is used (clockwise traversal).
+- If it is **smaller**, `decreasing_search` is used (counter-clockwise traversal).
+
+Both search helpers handle the wraparound edge case where the ring's maximum ID connects back to the minimum ID.
+
+After `create_gw_ring` returns, every gateway in `l_gws` has valid `gw_pred` and `gw_suc` references forming a complete, sorted ring.
+
+---
+
+### `add_sms_to_gw`
+
+```python
+def add_sms_to_gw(self) -> None
+```
+
+Iterates over every gateway in `l_gws` and calls `gw.connect_gw_to_sm()`, which creates `SmartMeter` instances and populates the gateway's `l_sms` dictionary. This is always the last step in `init_network`.

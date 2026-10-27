@@ -1,0 +1,229 @@
+---
+title: "Simulation Output Files and Data Formats"
+sidebarTitle: "Data Output"
+description: "deZent writes anonymized publication logs, full simulation logs, and Jha baseline outputs to structured CSV files. Learn the file naming convention and column schemas."
+---
+
+Every deZent simulation run produces a set of structured output files that capture both the privacy-preserving published data and the full underlying measurement trace. Understanding the file layout, naming convention, and column schemas is essential for running the analysis scripts, reproducing paper results, or adapting the framework to new datasets. This page documents all output directories, file formats, and the consumption profile data used as the simulation's input.
+
+---
+
+## Repository Data Layout
+
+```text
+data/
+├── anonymized_data/
+│   ├── deZent/     ← z-anonymous published tuples (one CSV per scenario × seed)
+│   └── jha/        ← Jha baseline output files (tab-separated .txt)
+├── log_data/
+│   └── deZent/     ← full simulation logs (all tuples, published and unpublished)
+└── consumption_data/
+                    ← standard load profile CSVs (VDEW/BDEW SLA profiles)
+```
+
+| Directory | Purpose |
+|---|---|
+| `data/anonymized_data/deZent/` | Published (z-anonymous) tuples for each scenario × parameter combination |
+| `data/anonymized_data/jha/` | Jha et al. baseline output files used for model validation |
+| `data/log_data/deZent/` | Full simulation logs containing every tuple, whether published or withheld |
+| `data/consumption_data/` | Standard load profile CSVs that drive smart meter consumption simulation |
+
+---
+
+## File Naming Convention
+
+All output files follow a consistent pattern that encodes the full set of simulation parameters:
+
+```text
+{scenario_prefix}_z_{z}_dt_{delta_t_seconds}_nGw_{n_gw}_distSm_{dist}_maxSm_{n_max_sm}_seed_{seed}.csv
+```
+
+**Example:**
+
+```text
+cent_w_comm_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv
+```
+
+| Token | Parameter | Example value |
+|---|---|---|
+| `{scenario_prefix}` | Scenario identifier (see below) | `cent_w_comm_zanon_z_` |
+| `{z}` | z-anonymity level | `1` |
+| `{delta_t_seconds}` | Time window length in seconds | `7260` (= 121 × 60) |
+| `{n_gw}` | Number of gateways | `5` |
+| `{dist}` | SM count distribution | `normal` |
+| `{n_max_sm}` | Maximum smart meters per gateway | `20` |
+| `{seed}` | Random seed | `1` |
+
+### Scenario Prefixes
+
+| Prefix | Scenario |
+|---|---|
+| `cent_w_comm_zanon_z_` | Centralized z-anonymity (equivalent to Jha et al.) |
+| `decent_w_comm_zanon_z_` | deZent — decentralized with minimal GW coordination |
+| `fully_decent_wo_coord_zanon_z_` | Fully decentralized without coordination |
+
+---
+
+## Anonymized Data CSV Format (`data/anonymized_data/deZent/`)
+
+Each anonymized data CSV embeds two message-count statistics as a compact header before the actual measurement data. The full file structure is:
+
+```text
+Row 0:  msg_count_gwgw,  <count>        ← GW↔GW message count header
+Row 1:  msg_cnt_gw_ce,   <count>        ← GW→CE message count header
+Row 2+: [data rows — published z-anonymous tuples]
+```
+
+### Reading the Data Rows
+
+Skip the two header rows by specifying `header=2`:
+
+```python
+import pandas as pd
+
+file = "data/anonymized_data/deZent/cent_w_comm_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv"
+
+df = pd.read_csv(file, sep=",", header=2)
+print(df.head())
+# Columns: measurement key, original value, timestamp, sm_id, type
+```
+
+### Reading the Message Count Header Rows
+
+```python
+df_meta = pd.read_csv(
+    file,
+    sep=",",
+    nrows=2,
+    header=None,
+    index_col=0,
+    usecols=[0, 1],
+    names=["label", "cnt"]
+)
+
+msg_cnt_gwgw = df_meta.loc["msg_count_gwgw", "cnt"]
+msg_cnt_gw_ce = df_meta.loc["msg_cnt_gw_ce", "cnt"]
+```
+
+### Data Row Columns
+
+| Column | Description |
+|---|---|
+| Measurement key | Unique identifier for the measurement tuple |
+| Original value | Raw consumption measurement from the smart meter |
+| Timestamp | Simulation time of the measurement |
+| `sm_id` | Smart meter identifier |
+| `type` | Consumer type (e.g., `1p_household`, `bakery`, `restaurant`) |
+
+<Note>
+  The number of data rows in an anonymized CSV equals `n_pub` — the count of tuples that satisfied the z-anonymity threshold and were forwarded to the central entity for publication. Tuples that could not be anonymized within the time window `d_t` are withheld and appear only in the simulation log.
+</Note>
+
+---
+
+## Simulation Log CSV Format (`data/log_data/deZent/`)
+
+The simulation log is written alongside the anonymized data during every deZent run. It records **every** tuple that occurred during the simulation — both published and withheld — and is used to compute publication ratios.
+
+### Filename
+
+Simulation log filenames are formed by prepending `simu_log_` to the corresponding anonymized data filename:
+
+```text
+simu_log_cent_w_comm_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_1.csv
+```
+
+### Reading the Simulation Log
+
+```python
+simu_log_file = "data/log_data/deZent/simu_log_" + anonymized_filename
+
+df_simu_log = pd.read_csv(simu_log_file, sep=",", header=0)
+n_total = len(df_simu_log)
+```
+
+### Columns
+
+The simulation log shares the same column structure as the data rows of the anonymized CSV: measurement key, original value, timestamp, `sm_id`, and `type`.
+
+### Computing Publication Ratio
+
+```python
+df_anon = pd.read_csv(anonymized_file, sep=",", header=2)
+df_log  = pd.read_csv(simu_log_file,   sep=",", header=0)
+
+n_pub   = len(df_anon)
+n_total = len(df_log)
+pub_ratio = n_pub / n_total
+```
+
+---
+
+## Jha Baseline Output Format (`data/anonymized_data/jha/`)
+
+The Jha simulation writes two files per scenario × seed combination, both stored alongside the deZent anonymized files in `data/anonymized_data/jha/`:
+
+<Accordion title="output_jha_simu_log_*.csv.txt — published tuples">
+  Tab-separated file with **no header row**. Each line is one published tuple:
+
+  ```text
+  <timestamp>\t<user_id>\t<value>
+  ```
+
+  Read with:
+
+  ```python
+  df_jha = pd.read_csv(
+      "data/anonymized_data/jha/output_jha_simu_log_" + scenario + ".csv.txt",
+      sep="\t",
+      header=None,
+      names=["time", "ID", "value"]
+  )
+  n_pub_jha = len(df_jha)
+  ```
+</Accordion>
+
+<Accordion title="counters_jha_simu_log_*.csv.txt — counter statistics">
+  Contains internal counter statistics produced by the Jha implementation during its run. Used for diagnostic purposes. The format mirrors the counter output from the original Jha et al. repository.
+</Accordion>
+
+<Warning>
+  The Jha output files use the **same scenario filename suffix** as the deZent files. The Jha simulation reads from `data/log_data/deZent/` — it uses the deZent simulation logs as its input trace. deZent must therefore be executed first before the Jha simulation can be run.
+</Warning>
+
+---
+
+## Consumption Profile Data (`data/consumption_data/`)
+
+Smart meter consumption is simulated using **standard load profiles (Standardlastprofile, SLA)** from the German VDEW/BDEW industry association. Each profile CSV represents the typical hourly consumption pattern for a specific consumer type across different seasons and day types (weekday, Saturday, Sunday).
+
+| File | Consumer Type |
+|---|---|
+| `SLA_h0_Haushalt.csv` | H0 — residential household |
+| `SLA_g0_GewerbeAllg.csv` | G0 — general commercial |
+| `SLA_g1_bureaus_workshops.csv` | G1 — bureaus and workshops (weekday-heavy) |
+| `SLA_g2_restaurants.csv` | G2 — restaurants and catering |
+| `SLA_g3_GewerbeDurchlaufend.csv` | G3 — continuous commercial operation |
+| `SLA_g4_store_hairdresser.csv` | G4 — retail stores and hair dressers |
+| `SLA_g5_bakery.csv` | G5 — bakery (early morning operation) |
+| `SLA_g6_Wochenendbetrieb.csv` | G6 — weekend-heavy commercial |
+| `SLA_l0_Landwirtschaftsbetrieb.csv` | L0 — general agriculture |
+| `SLA_l1_LandwirtschaftsbetriebMilchwirtschaft.csv` | L1 — dairy farming |
+| `SLA_l2_LandwirtschaftsbetriebUebrige.csv` | L2 — other agricultural operations |
+
+The statistical distribution of consumer types assigned to simulated smart meters is calibrated against real demographic and commercial data from the **Treptow-Köpenick district of Berlin**. This distribution is implemented in `deZent/profile_distribution.py`.
+
+<Note>
+  The consumption data is based on German standard load profiles (VDEW/BDEW) and demographic statistics from the Treptow-Köpenick district of Berlin. If you adapt deZent to a different region, replace the SLA CSVs with the appropriate national or regional profiles and update the consumer-type distribution in `profile_distribution.py` accordingly.
+</Note>
+
+### Reading a Consumption Profile
+
+```python
+import pandas as pd
+
+df_h0 = pd.read_csv("data/consumption_data/SLA_h0_Haushalt.csv")
+print(df_h0.head())
+```
+
+The raw VDEW profiles are also available in the original Excel format: `data/consumption_data/Repräsentative Profile VDEW.xls`.

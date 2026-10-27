@@ -1,0 +1,231 @@
+---
+title: "CBloomFilter: Counting Bloom Filter for Privacy-Preserving Counting"
+sidebarTitle: "CBloomFilter"
+description: "Reference for CBloomFilter — a Counting Bloom Filter implementation using MurmurHash3 that enables privacy-preserving aggregation of smart meter measurement hashes."
+---
+
+A Counting Bloom Filter (CBF) is a space-efficient probabilistic data structure that tracks how many times each item has been observed without storing the items themselves. Unlike a standard Bloom filter — which only supports membership queries — a CBF associates a small integer counter with each hash bucket, enabling both increment (`add`) and decrement (`remove`) operations. deZent uses a CBF to aggregate hashed smart meter measurement keys across multiple gateways during a collection round: every gateway adds its local measurements to the shared filter, the coordinating gateway subtracts the z threshold with `subtract_constant`, and any bucket that still has a positive count corresponds to a measurement value observed by at least z distinct meters — safe to publish anonymously.
+
+`CBloomFilter` extends the abstract `CntDataStructure` base class, which enforces the `add`, `check`, `remove`, and `is_empty` interface and provides the `add_measurements` and `existing_records` convenience methods used during ring traversal.
+
+## `CntDataStructure` Abstract Base Class
+
+```python
+from abc import ABC, abstractmethod
+
+class CntDataStructure(ABC):
+    @abstractmethod
+    def add(self, item): ...
+
+    @abstractmethod
+    def check(self, item) -> bool: ...
+
+    @abstractmethod
+    def remove(self, item): ...
+
+    @abstractmethod
+    def is_empty(self) -> bool: ...
+
+    def add_measurements(self, log: dict) -> None:
+        """Add every key in `log` once per record entry."""
+
+    def existing_records(self, r_list: Iterable) -> list:
+        """Return the subset of `r_list` keys that pass check()."""
+```
+
+`CBloomFilter` inherits `add_measurements` and `existing_records` from `CntDataStructure`. `add_measurements` iterates over the record log dictionary and calls `self.add(key)` once for each logged entry; `existing_records` calls `self.check(key)` on each candidate key and returns those that return `True`.
+
+---
+
+## Constructor
+
+```python
+class CBloomFilter(CntDataStructure):
+    def __init__(
+        self,
+        n: int,
+        Counter_size: int,
+        bucket_size: int,
+        no_hashfn: int,
+    ) -> None
+```
+
+<ParamField path="n" type="int" required>
+  Expected number of distinct items to be inserted. Used by the parameter-estimation formulas in `zanon_utils.create_cnt_structure`; does not affect internal storage directly.
+</ParamField>
+
+<ParamField path="Counter_size" type="int" required>
+  Bit-width `N` of each bucket's counter, stored as a `bitarray` of length `N`. Defaults to **20** in the deZent simulation, allowing up to 2²⁰ = 1,048,576 counts per bucket before overflow.
+</ParamField>
+
+<ParamField path="bucket_size" type="int" required>
+  Total number of buckets `m` in the filter. Estimated from `n` and the target false-positive rate P = 0.05 as:
+
+  ```
+  m = ⌊ (−n × ln(P)) / (ln(2))² ⌋
+  ```
+</ParamField>
+
+<ParamField path="no_hashfn" type="int" required>
+  Number of independent hash functions `k`. Estimated as:
+
+  ```
+  k = clamp( ⌊ (m / n) × ln(2) ⌋, 1, 6 )
+  ```
+
+  Using between 1 and 6 hash functions balances false-positive rate against per-operation cost.
+</ParamField>
+
+### Internal Storage
+
+Each bucket is represented as a `bitarray` of length `N` (from the `bitarray` library). The entire filter is stored as `self.bit_array`, a Python list of `m` such `bitarray` objects, all initialized to zero. Counters are read with `ba2int` and written back with `int2ba` from `bitarray.util`.
+
+---
+
+## Methods
+
+### `hash`
+
+```python
+def hash(self, item: int, seed: int) -> int
+```
+
+Computes a bucket index for `item` using MurmurHash3.
+
+```python
+h = mmh3.hash(item.to_bytes(32), seed, signed=False)
+return h % self.m
+```
+
+`item` is converted to a 32-byte big-endian representation before hashing. Each of the `k` hash functions uses a different `seed` value (0 through k−1), producing `k` independent bucket indices.
+
+<ParamField path="item" type="int" required>
+  The integer measurement key to hash. Must be representable as a 32-byte value.
+</ParamField>
+
+<ParamField path="seed" type="int" required>
+  Hash-function index (0 to k−1); used as the MurmurHash3 seed to produce independent hash values.
+</ParamField>
+
+**Returns:** `int` in `[0, m)` — the bucket index for this item/seed pair.
+
+---
+
+### `add`
+
+```python
+def add(self, item: int) -> None
+```
+
+Increments the counter in all `k` buckets identified by `hash(item, i)` for `i` in `[0, k)`.
+
+```python
+for i in range(self.k):
+    index = self.hash(item, i)
+    cur_val = ba2int(self.bit_array[index])
+    self.bit_array[index] = int2ba(cur_val + 1, length=self.N)
+```
+
+<ParamField path="item" type="int" required>
+  The integer key to insert (increment all associated bucket counters).
+</ParamField>
+
+---
+
+### `check`
+
+```python
+def check(self, item: int) -> bool
+```
+
+Returns `True` if all `k` bucket counters for `item` are greater than zero, indicating the item has *probably* been inserted. Returns `False` if any bucket counter is zero, guaranteeing the item has *never* been inserted (no false negatives).
+
+<ParamField path="item" type="int" required>
+  The integer key to test for membership.
+</ParamField>
+
+**Returns:** `True` if all k buckets have count > 0 (probabilistic membership); `False` if any bucket is zero (definite non-membership).
+
+---
+
+### `remove`
+
+```python
+def remove(self, item: int) -> None
+```
+
+Decrements all `k` bucket counters for `item`, but only if `check(item)` returns `True`. If `check` returns `False`, prints a warning and takes no action. Used to strip the coordinator's noise value before z-enforcement.
+
+<ParamField path="item" type="int" required>
+  The integer key to remove (decrement all associated bucket counters).
+</ParamField>
+
+---
+
+### `is_empty`
+
+```python
+def is_empty(self) -> bool
+```
+
+Returns `True` if every bucket's `bitarray` is entirely zero (i.e. `.any()` returns `False` for all buckets). Used in `decent_publication_round` to short-circuit the ring traversal once all publishable values have been emitted.
+
+**Returns:** `True` if the filter contains no items; `False` otherwise.
+
+---
+
+### `subtract_constant`
+
+```python
+def subtract_constant(self, z_min: int) -> None
+```
+
+Applies the z-anonymity threshold by subtracting `z_min` from every bucket. For each bucket:
+
+- If the bucket's current count is **greater than** `z_min`, the bucket is set to `count − z_min`.
+- Otherwise the bucket is zeroed.
+
+After this operation, only buckets whose original count was strictly greater than `z_min` survive with a positive value. Called via `zanon_utils.ensure_min_cnt_z(cnt_struct, z)`, which passes `z − 1` as `z_min`, so buckets that had exactly `z` observations retain a count of 1 and remain publishable.
+
+```python
+def subtract_constant(self, z_min: int) -> None:
+    for idx in range(len(self.bit_array)):
+        b = self.bit_array[idx].copy()
+        self.bit_array[idx].setall(0)
+        if ba2int(b) > z_min:
+            remainder = int2ba(ba2int(b) - z_min)
+            l_pad = len(self.bit_array[idx]) - len(remainder)
+            pad_bits = bitarray(l_pad)
+            b_remainder = pad_bits + remainder
+            self.bit_array[idx] ^= b_remainder
+```
+
+<ParamField path="z_min" type="int" required>
+  The value subtracted from each bucket. In deZent this is always `z − 1`, ensuring buckets with count ≥ z survive.
+</ParamField>
+
+---
+
+## Parameter Estimation
+
+CBF parameters are computed automatically by `zanon_utils.create_cnt_structure` each time a new filter is needed. The estimation uses the round coordinator's SM count and the number of anonymization cycles:
+
+```python
+# zanon_utils.create_cnt_structure (struct_type == "bloom")
+
+n = 10 * n_sm_conn * anon_cycles   # expected item count
+
+N = 20                              # 20-bit counters (up to 2^20 per bucket)
+
+P = 0.05                            # 5 % target false-positive rate
+m = int((-n * np.log(P)) / (np.log(2) ** 2))   # bucket count
+
+k_est = int((m / n) * np.log(2))
+k = max(1, min(k_est, 6))           # clamp to [1, 6] hash functions
+```
+
+The factor of 10 in the `n` estimate is a deliberate overestimate that compensates for variance across rounds with different coordinating GWs: rounds where the coordinator has fewer SMs than average produce a smaller filter (higher false-positive risk), while rounds with more SMs produce a larger one, and the expectation balances out over many rounds.
+
+<Note>
+  Because `CBloomFilter` is probabilistic, `check` may occasionally return `True` for an item that was never inserted — a **false positive**. This means the z-anonymity enforcement can very rarely pass a measurement hash as "seen ≥ z times" when it actually was not. This is an accepted privacy-utility tradeoff: the false-positive rate is bounded at P = 0.05 (5%) by the parameter estimation, and the noise addition/removal mechanism in `decent_zanon_w_comm` provides additional protection for the coordinating gateway's own measurements.
+</Note>

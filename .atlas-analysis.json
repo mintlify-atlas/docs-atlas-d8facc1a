@@ -1,0 +1,100 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "deZent",
+  "projectDescription": "A research simulation framework for decentralized z-anonymity in smart metering networks, enabling privacy-preserving energy consumption data publication with minimal gateway coordination.",
+  "theme": "palm",
+  "primaryColor": "#b42324",
+  "lightColor": "#b42324",
+  "darkColor": "#b46c6c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/z-anonymity",
+              "concepts/network-architecture",
+              "concepts/anonymization-scenarios"
+            ]
+          },
+          {
+            "group": "Running Simulations",
+            "pages": [
+              "simulation/configuration",
+              "simulation/dezent-simulation",
+              "simulation/jha-simulation",
+              "simulation/bash-script"
+            ]
+          },
+          {
+            "group": "Analysis & Validation",
+            "pages": [
+              "analysis/model-validation",
+              "analysis/simulation-stats",
+              "analysis/data-output"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Core Modules",
+            "pages": [
+              "reference/zanon",
+              "reference/network",
+              "reference/gateway",
+              "reference/smartmeter",
+              "reference/counting-bloom-filter"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "reference/zanon-utils",
+              "reference/profile-distribution",
+              "reference/logging-utils"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Decentralized z-anonymity with ring-topology gateway coordination",
+    "Three simulation scenarios: deZent (decentralized w/ coordination), centralized, and fully decentralized without coordination",
+    "Counting Bloom Filter-based probabilistic data structure for privacy-preserving data aggregation",
+    "Simulated smart metering network with realistic Berlin/Treptow-Köpenick consumption profile distributions",
+    "Configurable simulation parameters: z value, number of gateways, max smart meters per gateway, random seed",
+    "Model validation against centralized Jha et al. z-anonymity baseline",
+    "Automated data analysis scripts for publication ratio, message count, and per-SM-type statistics",
+    "Full reproducibility of arXiv paper results via provided simulation data and scripts"
+  ],
+  "publicApiSurface": [
+    "main.py <n_gw> <n_max_sm> <z> <seed> — entry point for running all three simulation scenarios",
+    "zAnon.decent_zanon_w_comm(network, t_start_offset) — decentralized z-anonymization with GW ring coordination",
+    "zAnon.central_zanon_w_cnt_struct(network, t_start_offset) — centralized z-anonymization using counting structure",
+    "zAnon.fully_decent_zanon_wo_coord(network, t_start_offset) — fully decentralized z-anonymization without coordination",
+    "Network.init_network(dist_num_sms, max_n_sms_at_gw) — initialize virtual network with gateways and smart meters",
+    "Gateway.add_curr_measurement(cnt_struct, curr_time) — collect SM measurements and add to counting structure",
+    "Gateway.get_curr_records_for_publishing(cnt_struct, curr_time) — retrieve anonymized records eligible for publication",
+    "CBloomFilter(n, N, m, k) — counting Bloom filter for privacy-preserving data aggregation",
+    "zanon_utils.create_cnt_structure(n_sm_conn, anon_cycles, struct_type) — factory for counting data structures",
+    "zanon_utils.ensure_min_cnt_z(cnt_struct, z) — enforce z-anonymity threshold by subtracting constant from counts",
+    "zanon_utils.publish_anonyimzed_tuples(data_origin, cnt_struct, p_pub, curr_time) — publish z-anonymous tuples",
+    "analyze_simu_stats.analyze_cnt_data(...) — compute message count statistics across simulation scenarios",
+    "analyze_simu_stats.analyze_pub_ratio(...) — compute publication ratio statistics across simulation scenarios",
+    "jha_cent_zanon/zanon.py zanon.anonymize(tupla) — centralized Jha et al. z-anonymity baseline implementation",
+    "scripts/run_zanon_simu.sh — batch runner for all parameter combinations"
+  ]
+}

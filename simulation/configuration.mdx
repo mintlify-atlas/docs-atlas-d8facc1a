@@ -1,0 +1,115 @@
+---
+title: "Simulation Configuration Parameters"
+sidebarTitle: "Configuration"
+description: "Configure deZent simulations with four command-line parameters: gateway count, max smart meters per gateway, z-anonymity threshold, and random seed."
+---
+
+deZent simulations are configured entirely through command-line arguments passed to `main.py`. Four parameters control the topology and privacy semantics of every run; all other simulation constants are fixed internally. Understanding both sets of values is important for reproducing the paper's results and for designing your own experiments.
+
+## CLI Parameters
+
+These four arguments must be supplied in order whenever you invoke `main.py`:
+
+```bash
+python3 main.py <n_gw> <n_max_sm> <z> <seed>
+```
+
+### `n_gw` — Number of Gateways (int)
+
+Specifies how many gateway (GW) nodes are created in the ring network. Each GW is assigned a random unique ID drawn from the pool `[0, 3 × n_gw)`, then all GWs are connected in sorted order to form a bidirectional ring (each GW knows its predecessor and successor). The ring is the backbone of deZent's decentralized coordination.
+
+**Example values used in the paper:** 5, 25, 50, 100, 250, 500, 1,000, 1,500
+
+### `n_max_sm` — Maximum Smart Meters per Gateway (int)
+
+Sets the upper bound for the number of smart meters (SMs) attached to each GW. The actual SM count at every GW is drawn independently from a **truncated normal distribution** with:
+
+- mean = `n_max_sm / 2`
+- standard deviation = `2`
+- lower bound = `0`, upper bound = `n_max_sm`
+
+If the draw rounds to less than 1, a minimum of 1 SM is enforced. This distribution reflects realistic heterogeneity across GWs in a deployment.
+
+**Example value used in the paper:** 20 (resulting in a mean of ~10 SMs per GW)
+
+### `z` — Z-Anonymity Threshold (int)
+
+Controls the privacy strength of the z-anonymity mechanism. A measurement value is only published once it has been observed by at least `z` distinct individuals within the anonymization window `delta_t`.
+
+| Value | Behaviour |
+|-------|-----------|
+| `0`   | No threshold — all measurements are published immediately (no anonymization) |
+| `1`   | Publish if seen by ≥ 1 individual (equivalent to no anonymization; every unique value is published) |
+| `5`+  | Stronger privacy — a value must be shared by at least 5 (or more) distinct SMs before it is released |
+
+Higher `z` values provide stronger privacy guarantees but reduce the publication ratio, as rarer consumption values may never meet the threshold within the time window.
+
+**Example values used in the paper:** 0, 5, 10, 25, 50, 100
+
+### `seed` — Random Seed (int)
+
+Seeds Python's `random` module for reproducible network topology generation (GW IDs, SM counts per GW). Using the same seed with the same `n_gw` and `n_max_sm` values will produce an identical network structure, enabling fair comparison across different `z` values.
+
+**Example values used in the paper:** 1 through 10
+
+---
+
+## Internal Fixed Parameters
+
+The following constants are hardcoded inside the simulation and cannot be changed via the CLI. They are defined in `main.py` and `zanon.py`.
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `delta_t` | 121 minutes (stored as **7,260 seconds**) | The anonymization window. Measurements older than `delta_t` are evicted from the counting structure; only the history within this window counts toward the z-anonymity threshold. |
+| `distribution` | `"normal"` | Distribution used to sample the number of SMs per GW (truncated normal, as described above). |
+| `simu_runtime` | `1440` time units | Total simulated time. Because the measurement frequency is 15 minutes and the simulation clock ticks in minutes, 1,440 ticks equals one full simulated day (96 measurement rounds). |
+| `measurement_frequency` | 15 minutes | How often each SM reports a consumption value to its GW. |
+| `cnt_struct_type` | `"bloom"` | Type of counting data structure used during the collection round — a Counting Bloom Filter. This stochastic structure allows GWs to exchange aggregated counts without revealing individual measurement values. |
+| `start_timepoint` | `2024-01-01` | ISO timestamp used as the simulation's wall-clock start. All published timestamps are offsets from this date. |
+
+---
+
+## Paper Evaluation Parameter Grid
+
+The full evaluation in the arXiv paper sweeps the following parameter combinations. With `n_max_sm` fixed at 20 and 10 seeds per configuration, this yields **8 × 1 × 6 × 10 = 480** individual simulation runs.
+
+| Parameter | Values |
+|-----------|--------|
+| `n_gw` | 5, 25, 50, 100, 250, 500, 1,000, 1,500 |
+| `n_max_sm` | 20 |
+| `z` | 0, 5, 10, 25, 50, 100 |
+| `seed` | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 |
+
+---
+
+## Output File Naming Convention
+
+Each simulation run produces two CSV files per scenario (deZent ring-coordinated, centralized, and fully decentralized). The filenames are constructed from the run's parameters so that every output file is uniquely identifiable:
+
+```
+{scenario_prefix}_z_{z}_dt_{delta_t_seconds}_nGw_{n_gw}_distSm_normal_maxSm_{n_max_sm}_seed_{seed}.csv
+```
+
+The three scenario prefixes are:
+
+| Prefix | Scenario |
+|--------|----------|
+| `decent_w_comm_zanon` | deZent ring-coordinated (decentralized with communication) |
+| `cent_w_comm_zanon` | Centralized (central entity collects from all GWs) |
+| `fully_decent_wo_coord_zanon` | Fully decentralized (each GW acts independently, no ring coordination) |
+
+**Example filename for the deZent scenario:**
+```
+decent_w_comm_zanon_z_5_dt_7260_nGw_25_distSm_normal_maxSm_20_seed_3.csv
+```
+
+### Output Directories
+
+| File type | Directory |
+|-----------|-----------|
+| Anonymized published data | `data/anonymized_data/deZent/` |
+| Complete simulation logs (all tuples, for publication-ratio analysis) | `data/log_data/deZent/` |
+
+<Note>
+  Simulation log files follow the same naming convention with a `simu_log_` prefix prepended to the anonymized data filename, e.g. `simu_log_decent_w_comm_zanon_z_5_dt_7260_nGw_25_distSm_normal_maxSm_20_seed_3.csv`. These files record every tuple that occurred during the simulation — not just the published ones — and are required as input for the Jha baseline comparison.
+</Note>

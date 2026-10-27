@@ -1,0 +1,234 @@
+---
+title: "Computing Simulation Statistics and Publication Ratios"
+sidebarTitle: "Simulation Stats"
+description: "Use analyze_simu_stats.py to compute message counts, publication ratios, and per-SM-type publication statistics across all deZent simulation scenarios."
+---
+
+After running the deZent simulation across the full parameter space, the next step is to compute the statistical results that appear in the evaluation section of the arXiv paper. The script `data_analysis/analyze_simulation/analyze_simu_stats.py` is the central evaluation tool: it reads the anonymized output CSVs and simulation logs, aggregates message counts and publication ratios across all scenarios, gateway counts, z-values, and random seeds, and writes the results to a set of structured CSV files. Pre-computed versions of all output CSVs are already included in the repository.
+
+## Overview
+
+The script exposes three independent analysis functions, each targeting a different evaluation question from the paper. They are all called from `main()` and share the same input path (`data/anonymized_data/deZent/`) and output path (`data_analysis/simulation_stats/`).
+
+The three **scenario prefixes** supported by every function are:
+
+| Prefix | Label in output CSVs |
+|---|---|
+| `cent_w_comm_zanon_z_` | `centralized` |
+| `decent_w_comm_zanon_z_` | `deZent` |
+| `fully_decent_wo_coord_zanon_z_` | `fully_decentralized` |
+
+---
+
+## Analysis Functions
+
+### `analyze_cnt_data`
+
+```python
+analyze_cnt_data(
+    prefix_scenario,   # list of scenario prefix strings
+    l_n_gw,           # list of gateway counts
+    d_t,              # time window in seconds
+    l_z,              # list of z-anonymity levels
+    l_seed,           # list of random seeds
+    input_anon_path,  # path to anonymized CSVs
+    output_path       # path for output CSVs
+)
+```
+
+This function counts the inter-node messages produced by each simulation run. Message counts are stored in the first two rows of every anonymized data CSV as a compact header:
+
+- **Row 0** — `msg_count_gwgw`: total messages exchanged between gateway nodes
+- **Row 1** — `msg_cnt_gw_ce`: total messages sent from gateways to the central entity
+
+These rows are read with:
+
+```python
+df_tmp = pd.read_csv(
+    input_file,
+    sep=",",
+    nrows=2,
+    header=None,
+    index_col=0,
+    usecols=[0, 1],
+    names=["label", "cnt"]
+)
+```
+
+The function builds a joint DataFrame with one row per (`scenario`, `n_gw`, `z`, `seed`) combination and computes averages across seeds, grouped by scenario and gateway count.
+
+**Output CSVs:**
+
+| File | Columns | Description |
+|---|---|---|
+| `msg_cnt_analysis.csv` | `n_gw, n_max_sm, z, msg_cnt_gw_gw, msg_cnt_gw_ce, d_t, scenario, dist_sm, seed` | Full per-run message count log |
+| `avg_msgcnt_gw_ce_per_scenario.csv` | `n_gw, scenario, msg_cnt_gw_ce` | Average GW→CE message count per scenario and gateway count |
+| `avg_msgcnt_gw_gw_per_scenario.csv` | `n_gw, scenario, msg_cnt_gw_gw` | Average GW↔GW message count per scenario and gateway count |
+
+---
+
+### `analyze_pub_ratio`
+
+```python
+analyze_pub_ratio(
+    prefix_scenario,
+    l_n_gw,
+    d_t,
+    l_z,
+    l_seed,
+    input_anon_path,
+    output_path
+)
+```
+
+This function computes the **publication ratio** for every (`scenario`, `n_gw`, `z`, `n_max_sm`, `seed`) combination. The publication ratio expresses what fraction of all tuples generated during the simulation were ultimately published (i.e., met the z-anonymity threshold):
+
+```
+pub_ratio = n_published / n_total_tuples
+```
+
+The anonymized data CSV is read starting at header row 2 (skipping the two message-count rows):
+
+```python
+df_anon_log = pd.read_csv(input_anon_file, sep=",", header=2)
+n_pub = len(df_anon_log)
+```
+
+The total tuple count comes from the corresponding simulation log:
+
+```python
+df_simu_log = pd.read_csv(
+    "./data/log_data/deZent/simu_log_" + input_anon_file,
+    sep=",",
+    header=0
+)
+n_total = len(df_simu_log)
+```
+
+For runs with `n_gw` ∈ {5, 25}, the function evaluates both `n_max_sm = 20` and `n_max_sm = 100`; for larger gateway counts only `n_max_sm = 20` is used.
+
+**Output CSV:**
+
+| File | Columns |
+|---|---|
+| `pub_ratio_analysis.csv` | `n_gw, n_max_sm, z, n_pub, n_total, pub_ratio, d_t, scenario, dist_sm, seed` |
+
+---
+
+### `analyze_pub_ratio_p_smtype`
+
+```python
+analyze_pub_ratio_p_smtype(
+    prefix_scenario,
+    l_z,
+    l_n_gw,
+    d_t,
+    l_seed,
+    input_anon_path,
+    output_path
+)
+```
+
+This function breaks down the publication ratio by **smart meter type**, allowing analysis of how different consumer categories are affected by z-anonymity. For each unique `type` value in the anonymized data, it filters both the anonymized CSV and the simulation log to compute a per-type publication ratio.
+
+Consumer types present in the simulation include:
+
+- `1p_household`, `2p_household`, `3p_household`, `4p_household` — residential household profiles
+- `workshop` — workshops / light commercial
+- `bakery` — bakery (operates early morning)
+- `restaurant` — restaurant / food service
+- `store` — retail store
+- `hair_dresser` — personal services
+
+<Tip>
+  Consumer types with highly regular consumption patterns (e.g., `bakery`) tend to have lower publication ratios because their measurement tuples are more predictable and harder to anonymize with z > 1. Examining per-type ratios helps identify which consumer segments benefit most from the deZent approach.
+</Tip>
+
+**Output CSV:**
+
+| File | Columns |
+|---|---|
+| `smtype_pub_ratio_analysis.csv` | `n_gw, n_max_sm, z, type, n_pub, n_total, pub_ratio, d_t, scenario, dist_sm, seed` |
+
+---
+
+## How to Run
+
+Open `data_analysis/analyze_simulation/analyze_simu_stats.py` and verify or adjust the parameter lists at the bottom of the file:
+
+```python
+l_n_gw  = [5, 25, 50, 75, 100, 125, 150]
+l_z     = [1, 5, 10, 25, 50, 100]
+d_t     = 121 * 60   # 7260 seconds
+l_seed  = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+prefix_scenario = [
+    "cent_w_comm_zanon_z_",
+    "decent_w_comm_zanon_z_",
+    "fully_decent_wo_coord_zanon_z_",
+]
+
+input_anon_path = "./data/anonymized_data/deZent/"
+output_path     = "./data_analysis/simulation_stats/"
+```
+
+Then execute from the repository root:
+
+```bash
+python3 data_analysis/analyze_simulation/analyze_simu_stats.py
+```
+
+All three analysis functions are called in sequence by `main()`.
+
+<Warning>
+  The script reads simulation log files from `data/log_data/deZent/`. These are produced during the deZent simulation run. Ensure the simulation has been executed for all parameter combinations before running the analysis script; missing files will raise a `FileNotFoundError`.
+</Warning>
+
+---
+
+## TEX Extraction Scripts
+
+Four additional scripts in `data_analysis/analyze_simulation/` convert the output CSVs into pgf-compatible `.dat` files for the paper's LaTeX figures:
+
+<Accordion title="extract_msg_cnt_tex.py">
+  Reads `avg_msgcnt_gw_ce_per_scenario.csv` and `avg_msgcnt_gw_gw_per_scenario.csv` and writes `.dat` files for the message count line plots shown in the paper's overhead analysis section.
+</Accordion>
+
+<Accordion title="extract_pub_ratio_tex.py">
+  Reads `pub_ratio_analysis.csv` and produces per-scenario `.dat` files for the publication ratio vs. z and publication ratio vs. n_gw figures.
+</Accordion>
+
+<Accordion title="extract_pub_ratio_smtype_tex.py">
+  Reads `smtype_pub_ratio_analysis.csv` and produces per-consumer-type `.dat` files for the SM-type breakdown bar charts.
+</Accordion>
+
+<Accordion title="plot_collusion_prob.py">
+  Computes and plots the analytical collusion probability curves used in the privacy analysis section of the paper. This script does not depend on the simulation output CSVs.
+</Accordion>
+
+Run each from the repository root:
+
+```bash
+python3 data_analysis/analyze_simulation/extract_msg_cnt_tex.py
+python3 data_analysis/analyze_simulation/extract_pub_ratio_tex.py
+python3 data_analysis/analyze_simulation/extract_pub_ratio_smtype_tex.py
+python3 data_analysis/analyze_simulation/plot_collusion_prob.py
+```
+
+---
+
+## Pre-computed Output CSVs
+
+The following files are already included in `data_analysis/simulation_stats/` and represent the full evaluation results from the paper:
+
+| File | Description |
+|---|---|
+| `msg_cnt_analysis.csv` | Per-run GW↔GW and GW→CE message counts |
+| `avg_msgcnt_gw_ce_per_scenario.csv` | Average GW→CE message count per scenario × n\_gw |
+| `avg_msgcnt_gw_gw_per_scenario.csv` | Average GW↔GW message count per scenario × n\_gw |
+| `pub_ratio_analysis.csv` | Per-run publication ratio for all scenarios |
+| `smtype_pub_ratio_analysis.csv` | Per-run, per-consumer-type publication ratio |
+
+<Note>
+  These pre-computed CSVs allow you to run the TEX extraction scripts and reproduce all paper figures without re-executing the full simulation. The simulation itself is compute-intensive — running all parameter combinations with 10 seeds each takes a significant amount of time; the README recommends splitting the parameter space across multiple parallel bash scripts.
+</Note>

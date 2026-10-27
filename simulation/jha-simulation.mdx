@@ -1,0 +1,144 @@
+---
+title: "Running the Jha Centralized Z-Anonymity Baseline"
+sidebarTitle: "Jha Baseline"
+description: "Run the Jha et al. centralized z-anonymity baseline using deZent simulation log files to compare publication ratios against the ring-coordinated deZent scenario."
+---
+
+The Jha baseline is a re-implementation of centralized z-anonymity from Jha et al. (DOI: [10.1109/BigData50022.2020.9378422](https://doi.org/10.1109/BigData50022.2020.9378422)), used in the deZent evaluation to validate that the ring-coordinated deZent scenario produces output quality comparable to a true centralized approach. By feeding the same raw measurement logs into both systems and comparing their publication ratios, the paper demonstrates that deZent achieves near-centralized anonymization quality with strictly less coordination.
+
+<Note>
+  This Jha implementation is used exclusively for **model validation** — it is not the deZent approach. Its purpose is to establish a ground-truth centralized reference against which deZent's decentralized output can be measured.
+</Note>
+
+## Prerequisites
+
+The Jha simulation reads the **simulation log files** produced by the deZent run, not the anonymized output. These log files record every tuple that occurred during the simulation (including suppressed ones) and are written to `data/log_data/deZent/` with names following the pattern:
+
+```
+simu_log_cent_w_comm_zanon_z_{z}_dt_{delta_t_seconds}_nGw_{n_gw}_distSm_normal_maxSm_{n_max_sm}_seed_{seed}.csv
+```
+
+You must execute the deZent simulation first and verify that the expected log files exist before proceeding.
+
+---
+
+## Running the Jha Simulation
+
+<Steps>
+  <Step title="Navigate to the Jha module directory">
+    ```bash
+    cd jha_cent_zanon/
+    ```
+  </Step>
+
+  <Step title="Configure simulation parameters in test_zanon.py">
+    Open `test_zanon.py` and edit the parameter variables near the top of the file to match the deZent log files you want to process:
+
+    ```python
+    input_path = "./data/log_data/deZent/"
+    jha_input_path = "./data/log_data/jha/"
+    anon_path = "./data/anonymized_data/jha/"
+
+    deltat = 7260        # anonymization window in seconds (must match deZent's delta_t)
+    l_n_gw = [5]         # list of n_gw values to process
+
+    for seed in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+        for z_val in [1, 5, 10, 25, 50, 100]:
+            ...
+    ```
+
+    Adjust `l_n_gw`, `seed`, and `z_val` to match the deZent runs you have already executed. The `deltat` value must equal the `delta_t.seconds` embedded in the deZent log filename (7,260 for the default 121-minute window).
+  </Step>
+
+  <Step title="Run the Jha simulation">
+    ```bash
+    python3 test_zanon.py
+    ```
+
+    For each `(n_gw, seed, z_val)` combination, `test_zanon.py`:
+
+    1. Reads the corresponding deZent simulation log CSV.
+    2. Converts ISO timestamps to Unix timestamps (`preprocess_log_data_for_zanon`).
+    3. Writes a pre-processed input file to `data/log_data/jha/`.
+    4. Instantiates a `zanon` object and feeds every tuple through `anonymize()`.
+    5. Calls `endFiles()` to flush and close output file handles.
+    6. Calls `duration()` to print the total simulated time span.
+  </Step>
+
+  <Step title="Inspect output files">
+    Results are written to `data/anonymized_data/jha/`. Two text files are produced per scenario:
+
+    - **`output_jha_simu_log_{scenario}.csv.txt`** — Published tuples, tab-separated: `time`, `user_id`, `category_value`.
+    - **`counters_jha_simu_log_{scenario}.csv.txt`** — Counter statistics for every tuple: `time`, `user_id`, `category_value`, followed by per-level occurrence counts.
+  </Step>
+</Steps>
+
+---
+
+## The `zanon` Class
+
+The Jha anonymization logic lives in `jha_cent_zanon/zanon.py`. The class manages a sliding-window hash structure that tracks how many distinct users have produced each category value within the last `deltat` seconds.
+
+### Constructor
+
+```python
+zanon(deltat, z, fn_path, fn)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `deltat` | int | Anonymization window in **seconds** (e.g. `7260` for 121 minutes). Tuples older than this are evicted from the sliding window. |
+| `z` | int | Z-anonymity threshold. A value is published once it has been seen by ≥ `z` distinct users within `deltat`. |
+| `fn_path` | str | Output directory path (e.g. `"./data/anonymized_data/jha/"`). |
+| `fn` | str | Base filename. Two files are opened at construction time: `output_{fn}.txt` and `counters_{fn}.txt`. |
+
+### `anonymize(tupla)`
+
+```python
+z_instance.anonymize((timestamp, user_id, category_value))
+```
+
+Accepts a 3-element tuple and applies the z-anonymity check:
+
+1. Evicts stale entries from the sliding window for the current category value.
+2. Calls `clean_queue()` to evict stale tuples across all tracked values.
+3. Updates the internal hash structure (`H`) and per-category counters (`c`).
+4. If the occurrence count for the category reaches or exceeds `z`, the tuple is written to the output file and appended to the queue.
+5. Writes per-level counter statistics to the counters file for every tuple regardless of publication.
+
+The `category_value` field supports hierarchical categories delimited by `*`; in the smart metering context it carries a bucketed consumption value.
+
+### `duration()`
+
+```python
+z_instance.duration()
+```
+
+Prints the total span of simulated time covered by the processed tuples, computed as `t_stop − t_start` in seconds.
+
+### `evaluate_output()`
+
+```python
+z_instance.evaluate_output()
+```
+
+Runs post-hoc output evaluation logic (delegates to `evaluate_output()` from `evaluate_output.py`).
+
+### `endFiles()`
+
+```python
+z_instance.endFiles()
+```
+
+Closes both output file handles (`f_out` and `f_count`). **This must be called after all tuples have been processed**, or the output files may be truncated.
+
+---
+
+## Comparing Jha Output to deZent Output
+
+After both simulations have run, you can compare the number of published tuples (or the publication ratio) between:
+
+- **Centralized deZent:** `data/anonymized_data/deZent/cent_w_comm_zanon_z_{z}_dt_7260_nGw_{n_gw}_distSm_normal_maxSm_20_seed_{seed}.csv`
+- **Jha baseline:** `data/anonymized_data/jha/output_jha_simu_log_jha_simu_log_cent_w_comm_zanon_z_{z}_dt_7260_nGw_{n_gw}_distSm_normal_maxSm_20_seed_{seed}.csv.txt`
+
+The `analyze_pub_diff.py` script in the repository root automates this comparison and reports the difference in publication ratios.

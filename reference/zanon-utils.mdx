@@ -1,0 +1,238 @@
+---
+title: "zanon_utils: Z-Anonymity Utility Functions"
+sidebarTitle: "zanon_utils"
+description: "Reference for zanon_utils — helper functions for creating Counting Bloom Filters, evicting stale records, enforcing z thresholds, and publishing anonymized tuples."
+---
+
+`zanon_utils.py` provides the stateless utility layer used by `zAnon` for data structure creation, record management, and publication logic. Rather than embedding these operations inside individual gateway or central-entity classes, deZent isolates them here so the same functions serve both the ring-coordinated decentralized scenario and the centralized baseline — differing only where a `data_origin.id == "CE"` guard selects the appropriate code path.
+
+## `get_truncated_normal`
+
+Returns a [truncated normal distribution](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.truncnorm.html) object from `scipy.stats`. Used by `Network.get_n_sm()` to sample the number of smart meters per gateway, ensuring that sampled counts stay within a realistic integer range instead of extending to negative values or implausible extremes.
+
+```python
+def get_truncated_normal(mean=0, sd=1, low=0, upp=10) -> scipy.stats.truncnorm
+```
+
+<ParamField path="mean" type="float" default="0">
+  Centre of the normal distribution.
+</ParamField>
+
+<ParamField path="sd" type="float" default="1">
+  Standard deviation of the underlying normal distribution.
+</ParamField>
+
+<ParamField path="low" type="float" default="0">
+  Lower bound of the truncation window. Samples below this value are rejected.
+</ParamField>
+
+<ParamField path="upp" type="float" default="10">
+  Upper bound of the truncation window. Samples above this value are rejected.
+</ParamField>
+
+**Returns** `scipy.stats.truncnorm` — a frozen distribution object whose `.rvs()` method can be called to draw samples.
+
+---
+
+## `create_cnt_structure`
+
+Factory function that builds a Counting Bloom Filter (CBF) sized for the current collection round. The CBF parameters are derived from the number of smart meters at the coordinating gateway and the number of measurement cycles that fall within the anonymization window `delta_t`, so the filter is automatically re-calibrated each time the coordinating role rotates to a different gateway.
+
+```python
+def create_cnt_structure(n_sm_conn, anon_cycles, struct_type) -> CBloomFilter
+```
+
+<ParamField path="n_sm_conn" type="int" required>
+  Number of smart meters connected to the coordinating gateway. Because different gateways have different numbers of connected SMs, the CBF size varies across rounds — this is deliberately accepted, as overestimates and underestimates are expected to balance out over time.
+</ParamField>
+
+<ParamField path="anon_cycles" type="int" required>
+  Number of measurement cycles within `delta_t`, calculated as `delta_t.seconds / measurement_frequency.seconds`. Represents how many distinct time-slots of measurements can coexist inside the anonymization window.
+</ParamField>
+
+<ParamField path="struct_type" type="str" required>
+  The count structure type to create. Currently only `"bloom"` is supported; the function uses a `match` statement and will raise an error for unrecognised values.
+</ParamField>
+
+**Returns** `CBloomFilter` — a fully initialised counting Bloom filter.
+
+**CBF parameter derivation** for `struct_type="bloom"`:
+
+| Symbol | Formula | Meaning |
+|---|---|---|
+| `n` | `10 × n_sm_conn × anon_cycles` | Expected number of distinct items across all gateways in the ring |
+| `N` | `20` | Bits per counter bucket (supports up to 2²⁰ counts per slot) |
+| `P` | `0.05` | Target false-positive rate (5%) |
+| `m` | `int((-n × ln(P)) / (ln(2)²))` | Total number of buckets in the filter |
+| `k` | `max(1, min(int((m/n) × ln(2)), 6))` | Number of hash functions, clamped to the range [1, 6] |
+
+```python
+# Example: 10 SMs, 96 measurement cycles within delta_t
+cbf = create_cnt_structure(n_sm_conn=10, anon_cycles=96, struct_type="bloom")
+# n = 9600, P = 0.05, m = ~57,647, k = 4
+```
+
+---
+
+## `apply_deltat_to_records`
+
+Evicts stale measurements from a gateway's `RecordLog` by removing every log entry whose timestamp is older than `curr_time - dt`. After SM-level deletions, any record key that has no remaining entries is also removed from the log, preventing empty dict shells from accumulating. This function is called at the start of each collection round to ensure only measurements within the active anonymization window are considered.
+
+```python
+def apply_deltat_to_records(record_log, curr_time, dt) -> RecordLog
+```
+
+<ParamField path="record_log" type="RecordLog" required>
+  The current in-memory record log for the gateway or central entity. Modified in place and also returned.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime" required>
+  The simulation clock time at the start of the current round. Acts as the reference point for the `delta_t` cutoff.
+</ParamField>
+
+<ParamField path="dt" type="timedelta" required>
+  The anonymization window duration (`delta_t`). Any entry recorded before `curr_time - dt` is evicted.
+</ParamField>
+
+**Returns** the updated `RecordLog` with all out-of-window entries removed.
+
+```python
+# Evict all measurements older than the delta_t window
+record_log = apply_deltat_to_records(record_log, curr_time=env.now, dt=delta_t)
+```
+
+---
+
+## `ensure_min_cnt_z`
+
+Enforces the z-anonymity threshold on a stochastic Counting Bloom Filter by subtracting `z - 1` from every bucket counter. After this operation, only items that were observed at least `z` times will have a non-zero count remaining in the filter. Items seen fewer than `z` times are effectively zeroed out and will not appear as valid candidates during the publication phase.
+
+```python
+def ensure_min_cnt_z(cnt_struct, z) -> CBloomFilter
+```
+
+<ParamField path="cnt_struct" type="CBloomFilter" required>
+  The Counting Bloom Filter accumulated during the collection round. Modified in place via `subtract_constant`.
+</ParamField>
+
+<ParamField path="z" type="int" required>
+  The z-anonymity threshold. Items with a count strictly less than `z` will be zeroed out.
+</ParamField>
+
+**Returns** the modified `CBloomFilter` with counts below `z` cleared.
+
+<Note>
+  `subtract_constant` is called with `z - 1`, not `z`, because a count of exactly `z` must survive. For example, with `z = 5`, bucket values of 1–4 become 0 or negative (treated as 0), while a value of 5 becomes 1 — still a positive hit during membership checks.
+</Note>
+
+---
+
+## `central_ensure_min_cnt_z`
+
+The centralized variant of the z-threshold enforcement step. Operates on a pandas DataFrame (the central entity's count structure) rather than a CBF, subtracting `z - 1` from the `tuple_count` column and then filtering to rows where the count remains positive.
+
+```python
+def central_ensure_min_cnt_z(cnt_struct, z) -> pandas.DataFrame
+```
+
+<ParamField path="cnt_struct" type="pandas.DataFrame" required>
+  DataFrame with at least two columns: `measurement` (the hashed measurement key) and `tuple_count` (how many times that value has been observed across all gateways).
+</ParamField>
+
+<ParamField path="z" type="int" required>
+  The z-anonymity threshold. Rows where `tuple_count` falls to 0 or below after subtraction are dropped from the returned DataFrame.
+</ParamField>
+
+**Returns** a filtered `pandas.DataFrame` containing only rows where `tuple_count > 0` after subtracting `z - 1`.
+
+```python
+# Central entity enforces z = 5 on its count DataFrame
+valid_counts = central_ensure_min_cnt_z(cnt_struct=ce_dataframe, z=5)
+# Rows with fewer than 5 observations are excluded from publication
+```
+
+---
+
+## `publish_anonyimzed_tuples`
+
+Drives the publication phase for either a Gateway or CentralEntity. Retrieves the list of candidate records that appear in the current count structure, then for each candidate draws a random integer in [0, 100] and publishes only if it falls within `p_pub`. When the candidate is confirmed as publishable, the function delegates to `data_origin.publish_tuple()`, marks the corresponding `RecordLog` entry as published, and removes the item from the count structure to prevent duplicate publication.
+
+```python
+def publish_anonyimzed_tuples(data_origin, cnt_struct, p_pub, curr_time) -> cnt_struct
+```
+
+<ParamField path="data_origin" type="Gateway | CentralEntity" required>
+  The entity initiating publication. The function inspects `data_origin.id == "CE"` to branch between the centralized DataFrame path and the stochastic CBF path. Both Gateway and CentralEntity expose the same `get_curr_records_for_publishing()`, `publish_tuple()`, and `record_log` interface.
+</ParamField>
+
+<ParamField path="cnt_struct" type="CBloomFilter | pandas.DataFrame" required>
+  The count structure after z-threshold enforcement. For gateways this is a `CBloomFilter`; for the central entity this is a `pandas.DataFrame`. The function returns this object after mutating it to reflect published items.
+</ParamField>
+
+<ParamField path="p_pub" type="int" required>
+  Publication probability in the range [0, 100]. A random integer is drawn per candidate; if the draw is ≤ `p_pub`, publication proceeds. Set to `100` to publish all eligible candidates deterministically (as used by the central entity). Lower values provide additional plausible deniability.
+</ParamField>
+
+<ParamField path="curr_time" type="datetime" required>
+  The current simulation clock time, forwarded to `get_curr_records_for_publishing()` to scope candidates to the active time window.
+</ParamField>
+
+**Returns** the updated `cnt_struct` (CBF or DataFrame) with all published items decremented or removed.
+
+**Publication flow:**
+
+1. Call `data_origin.get_curr_records_for_publishing(cnt_struct, curr_time)` → list of `PubLogEntry` candidates.
+2. For each candidate, draw `rnd = random.randint(0, 100)`.
+3. If `rnd <= p_pub`, call `check_cnt_struct()` to confirm the item is still in the count structure.
+4. On confirmation: call `data_origin.publish_tuple(rec2pub)`, update `record_log.is_published`, and remove the item from the count structure.
+5. For CBF (GW path): call `cnt_struct.remove(rec2pub.key)`. Break early if the CBF becomes empty.
+6. For DataFrame (CE path): call `remove_rec_cnt(cnt_struct, rec2pub.key)`.
+
+---
+
+## `check_cnt_struct`
+
+Helper that performs a membership/validity check on the count structure appropriate to the data origin. For the central entity's deterministic DataFrame, it verifies that `tuple_count > 0` for the candidate's measurement key. For a gateway's stochastic CBF, it calls the probabilistic `cs.check()` method.
+
+```python
+def check_cnt_struct(data_origin, cs, rec) -> bool
+```
+
+<ParamField path="data_origin" type="Gateway | CentralEntity" required>
+  Used to determine which code path to follow: `data_origin.id == "CE"` triggers the DataFrame lookup; any other ID triggers the CBF check.
+</ParamField>
+
+<ParamField path="cs" type="CBloomFilter | pandas.DataFrame" required>
+  The count structure to query. Must match the type implied by `data_origin`.
+</ParamField>
+
+<ParamField path="rec" type="PubLogEntry" required>
+  The candidate record to check. For the CE path, `rec.key` is looked up in the `measurement` column of the DataFrame. For the GW path, `rec.key` is passed directly to `cs.check()`.
+</ParamField>
+
+**Returns** `bool` — `True` if the record is currently valid in the count structure, `False` otherwise.
+
+---
+
+## `remove_rec_cnt`
+
+Decrements the `tuple_count` for a specific measurement value in the central entity's count DataFrame. Called after a successful publication to reflect that one instance of the measurement has been consumed from the anonymized pool.
+
+```python
+def remove_rec_cnt(cnt_struct, val) -> pandas.DataFrame
+```
+
+<ParamField path="cnt_struct" type="pandas.DataFrame" required>
+  The central entity's count DataFrame with columns `measurement` and `tuple_count`.
+</ParamField>
+
+<ParamField path="val" type="str" required>
+  The measurement key (hash string) identifying the row to decrement. Matched against the `measurement` column.
+</ParamField>
+
+**Returns** the updated `pandas.DataFrame` with `tuple_count` decremented by 1 for the matching row.
+
+```python
+# After publishing a tuple, remove one count from the central structure
+cnt_struct = remove_rec_cnt(cnt_struct, val=pub_entry.key)
+```
