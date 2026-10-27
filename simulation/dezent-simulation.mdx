@@ -1,7 +1,7 @@
 ---
-title: "Running the deZent Simulation"
+title: "Running the deZent Simulation: All Three Scenarios"
 sidebarTitle: "deZent Run"
-description: "Run deZent's three z-anonymity simulation scenarios — ring-coordinated, centralized, and fully decentralized — from the deZent/src/ directory with a single main.py call."
+description: "Run deZent's three z-anonymity scenarios from deZent/src/ using a single main.py call. One shared network runs all three protocols back-to-back."
 ---
 
 A single invocation of `main.py` executes all three deZent scenarios back-to-back on the same simulated network and writes six output CSV files to disk — two per scenario. The three scenarios cover the full spectrum of coordination strategies: deZent's ring-coordinated approach, a traditional centralized baseline, and a fully decentralized reference with no inter-GW coordination.
@@ -42,10 +42,10 @@ A single invocation of `main.py` executes all three deZent scenarios back-to-bac
   </Step>
 
   <Step title="Collect output files">
-    After the run completes, six CSV files are written — one anonymized log and one simulation log per scenario — to:
+    After the run completes, six CSV files are written — one anonymized log and one simulation log per scenario — to the following paths (relative to `deZent/src/`, i.e. the directory you run `main.py` from):
 
-    - **Anonymized data:** `data/anonymized_data/deZent/`
-    - **Simulation logs:** `data/log_data/deZent/`
+    - **Anonymized data:** `../../data/anonymized_data/deZent/`
+    - **Simulation logs:** `../../data/log_data/deZent/`
 
     Filenames encode all run parameters; see [Configuration Parameters](/simulation/configuration#output-file-naming-convention) for the full naming convention.
   </Step>

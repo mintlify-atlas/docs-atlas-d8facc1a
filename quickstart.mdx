@@ -1,7 +1,7 @@
 ---
-title: "Get Started with deZent Simulations"
+title: "deZent Setup: Install Dependencies and Run Simulations"
 sidebarTitle: "Quickstart"
-description: "Install deZent's Python dependencies, set up a virtual environment, and run all three z-anonymity simulation scenarios with a single command in under five minutes."
+description: "Install deZent Python dependencies, configure a virtual environment, and run all three z-anonymity simulation scenarios with a single command in minutes."
 ---
 
 This guide walks you through cloning the repository, setting up a Python virtual environment, installing all required packages, and executing your first simulation run. A single invocation of `main.py` runs all three scenarios — deZent ring-coordinated, centralized, and fully decentralized — on the same synthetic network and writes the results to CSV files ready for analysis.
@@ -91,6 +91,8 @@ This guide walks you through cloning the repository, setting up a Python virtual
     | `n_max_sm` | `int` | Maximum smart meters per gateway; actual counts are drawn from a normal distribution centred on this value | `20` |
     | `z` | `int` | Z-anonymity threshold — a data point is published only when at least *z* identical values have been observed within the time window. Set to `0` to disable anonymization | `1`, `5`, `10`, `25` |
     | `seed` | `int` | Random seed for reproducible network generation and measurement sampling | `1`–`10` |
+
+    The time window parameter `delta_t` is not a CLI argument — it is fixed in the simulation code at **121 minutes** (stored internally as 7260 seconds). This value appears in every output filename as `_dt_7260_`.
 
     **Concrete example** — 5 gateways, up to 20 smart meters each, z = 1, seed = 1:
 

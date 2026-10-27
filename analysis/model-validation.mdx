@@ -1,7 +1,7 @@
 ---
 title: "Model Validation: Comparing deZent with the Jha Baseline"
 sidebarTitle: "Model Validation"
-description: "Validate deZent's centralized scenario against the Jha et al. baseline by comparing published tuple counts and publication ratios using analyze_pub_diff.py."
+description: "Validate the centralized deZent scenario against the Jha et al. baseline, comparing published tuple counts and publication ratios with analyze_pub_diff.py."
 ---
 
 Model validation is the process of verifying that deZent's implementation of z-anonymity faithfully reproduces the behaviour of the established reference. Specifically, this step compares the **centralized deZent scenario** (`cent_w_comm_zanon_z_...`) against the centralized z-anonymity implementation published by Jha et al. (IEEE BigData 2020). If both implementations operate on the same simulation log and produce identical publication counts and ratios, confidence in the correctness of the deZent codebase is established before the decentralized scenarios are evaluated.
@@ -100,7 +100,7 @@ Three additional scripts convert the validation results into data files suitable
 </Accordion>
 
 <Accordion title="generate_tex_histogram.py">
-  Generates histogram plot data for the distribution of `npub_diff` and `pub_rat_diff` values across seeds and parameter configurations.
+  Generates measurement-value count histograms by joining deZent and Jha published tuples across all seeds for a chosen scenario. Writes per-value frequency `.dat` files (raw counts and 3-bin averaged counts) for both implementations to `model_validation/data/`, named `deZ_value_cnt_z{z}{scenario_params}.dat`, `Jha_value_cnt_z{z}{scenario_params}.dat`, and their averaged counterparts.
 </Accordion>
 
 Run each from the repository root:
@@ -120,10 +120,12 @@ The following data files are already included in `model_validation/data/` and re
 | `npub_diff.csv` | Per-seed raw diff data (primary validation output) |
 | `avg_npub_diff.dat` | Mean `npub_diff` and standard deviation aggregated over seeds, indexed by `n_gw` and `z` |
 | `avg_pub_ratio_diff.dat` | Mean `pub_rat_diff` and standard deviation aggregated over seeds |
-| `avg_deZ_npub_over_time_*.dat` | deZent cumulative publication count over simulated time |
-| `avg_jha_npub_over_time_*.dat` | Jha cumulative publication count over simulated time |
+| `deZ_npub_over_time_{scenario}.dat` | Per-run deZent cumulative publication count over simulated time |
+| `avg_deZ_npub_over_time_{scenario}.dat` | Averaged deZent cumulative publication count over simulated time |
+| `jha_npub_over_time_{scenario}.dat` | Per-run Jha cumulative publication count over simulated time |
+| `avg_jha_npub_over_time_{scenario}.dat` | Averaged Jha cumulative publication count over simulated time |
 
-The `*.dat` files use space-separated columns and are consumed directly by pgf plots in the paper's LaTeX source.
+Where `{scenario}` encodes the full parameter set, for example: `cent_w_comm_zanon_z_1_dt_7260_nGw_5_distSm_normal_maxSm_20_seed_5`. The `.dat` files use space-separated columns and are consumed directly by pgf plots in the paper's LaTeX source.
 
 <Note>
   The pre-computed data in `model_validation/data/` allows you to inspect and plot validation results without re-running either simulation. All values of `npub_diff` and `pub_rat_diff` in the included dataset are 0, confirming that the centralized deZent scenario is equivalent to the Jha baseline for the tested parameters.

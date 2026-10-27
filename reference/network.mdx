@@ -1,5 +1,5 @@
 ---
-title: "Network: Virtual Gateway Ring Initialization"
+title: "Network: Gateway Ring Topology and SM Initialization"
 sidebarTitle: "Network"
 description: "Reference for the Network class, which builds the simulated ring topology of gateways and smart meters used in all three deZent simulation scenarios."
 ---
@@ -112,6 +112,54 @@ Connects all gateways in `l_gws` into a **sorted doubly-linked ring** ordered by
 Both search helpers handle the wraparound edge case where the ring's maximum ID connects back to the minimum ID.
 
 After `create_gw_ring` returns, every gateway in `l_gws` has valid `gw_pred` and `gw_suc` references forming a complete, sorted ring.
+
+---
+
+### `get_gw_id`
+
+```python
+def get_gw_id(self) -> int
+```
+
+Draws a random integer ID from `l_free_gw_ids`, removes it from the pool to guarantee uniqueness, and returns it. Called once per gateway during `open_gws`. Because `l_free_gw_ids` is initialised as `set(np.arange(0, 3 * n_gws))`, each ID in the range `[0, 3 * n_gws)` can appear at most once across all gateways in the network.
+
+**Returns:** `int` — a unique gateway ID drawn from the available pool.
+
+---
+
+### `increasing_search`
+
+```python
+def increasing_search(self, entry_gw: Gateway, gw: Gateway) -> None
+```
+
+Traverses the ring **clockwise** (in ascending ID order) to find the correct insertion point for `gw`. Starts at `entry_gw` and advances via `gw_suc` pointers. Inserts `gw` between the last node whose ID is smaller than `gw.id` and its successor. Handles the wraparound edge case where the highest-ID node connects back to the lowest-ID node.
+
+<ParamField path="entry_gw" type="Gateway" required>
+  The ring entry point — always the first gateway inserted (which serves as the reference node for all subsequent insertions).
+</ParamField>
+
+<ParamField path="gw" type="Gateway" required>
+  The new gateway to insert; its `id` is greater than `entry_gw.id`, so the correct slot lies clockwise from the entry point.
+</ParamField>
+
+---
+
+### `decreasing_search`
+
+```python
+def decreasing_search(self, entry_gw: Gateway, gw: Gateway) -> None
+```
+
+Traverses the ring **counter-clockwise** (in descending ID order) to find the insertion point for `gw`. Starts at `entry_gw` and advances via `gw_pred` pointers. Inserts `gw` between the first predecessor whose ID is smaller than `gw.id` and its successor. Handles the wraparound edge case symmetrically to `increasing_search`.
+
+<ParamField path="entry_gw" type="Gateway" required>
+  The ring entry point used as the starting node for the backwards traversal.
+</ParamField>
+
+<ParamField path="gw" type="Gateway" required>
+  The new gateway to insert; its `id` is less than `entry_gw.id`, so the correct slot lies counter-clockwise from the entry point.
+</ParamField>
 
 ---
 

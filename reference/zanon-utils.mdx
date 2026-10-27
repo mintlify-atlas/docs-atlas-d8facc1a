@@ -1,7 +1,7 @@
 ---
-title: "zanon_utils: Z-Anonymity Utility Functions"
+title: "zanon_utils: CBF and Z-Anonymity Utility Functions"
 sidebarTitle: "zanon_utils"
-description: "Reference for zanon_utils — helper functions for creating Counting Bloom Filters, evicting stale records, enforcing z thresholds, and publishing anonymized tuples."
+description: "Reference for zanon_utils — utilities for Counting Bloom Filters, record eviction, z-threshold enforcement, and tuple publication in deZent."
 ---
 
 `zanon_utils.py` provides the stateless utility layer used by `zAnon` for data structure creation, record management, and publication logic. Rather than embedding these operations inside individual gateway or central-entity classes, deZent isolates them here so the same functions serve both the ring-coordinated decentralized scenario and the centralized baseline — differing only where a `data_origin.id == "CE"` guard selects the appropriate code path.

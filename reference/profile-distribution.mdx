@@ -1,7 +1,7 @@
 ---
 title: "ProfileDistribution: Realistic Consumer Type Distributions"
 sidebarTitle: "ProfileDistribution"
-description: "Reference for the ProfileDistribution classes, which assign smart meters to consumer types using real Berlin district demographic statistics and VDEW standard load profiles."
+description: "Reference for ProfileDistribution — assigns smart meters to consumer types using Treptow-Köpenick district and Berlin city-wide demographic statistics."
 ---
 
 `ProfileDistribution` generates weighted distributions of consumer types for each gateway, grounding the simulation in real-world demographic data rather than uniform random assignment. The default implementation draws from the Treptow-Köpenick district of Berlin — a district whose household and commercial ratios closely match the Berlin city-wide average — so that each gateway's mix of simulated smart meters reflects a plausible urban neighbourhood. A Berlin city-wide variant is also available for comparison.
@@ -60,6 +60,41 @@ dist.generate_sm_weighted_distribution(profile_type="tk", gw_type="standard")
 
 ---
 
+## `ProfileDistribution_mask`
+
+Abstract base class that all regional profile classes inherit from (except `ProfileDistribution_bln`, which is a standalone class). Provides the `get_weighted_distribution` method used by `ProfileDistribution.generate_sm_weighted_distribution()` to retrieve the consumer type sample list and ratio weights.
+
+### `get_weighted_distribution`
+
+Returns the ordered consumer type name list and the corresponding ratio weights for the given gateway type. For `gw_type="standard"`, all nine consumer categories are included in a fixed order.
+
+```python
+def get_weighted_distribution(self, gw_type: str) -> tuple[list[str], list[float]]
+```
+
+<ParamField path="gw_type" type="str" required>
+  The gateway type variant to use. Currently only `"standard"` is supported, which returns all nine consumer type categories.
+</ParamField>
+
+**Returns** a tuple `(sample_list, weighted_list)` where:
+
+- `sample_list` — fixed-order list of consumer type name strings:
+  ```python
+  ["1p_household", "2p_household", "3p_household", "4p_household",
+   "workshop", "bakery", "restaurant", "store", "hair_dresser"]
+  ```
+- `weighted_list` — list of the corresponding ratio floats drawn from the regional profile's instance attributes (`ratio_1p`, `ratio_2p`, `ratio_3p`, `ratio_4p`, `ratio_workshops`, `ratio_bakery`, `ratio_restaurants`, `ratio_store`, `ratio_hair`).
+
+```python
+# Called internally by ProfileDistribution.generate_sm_weighted_distribution
+tk = ProfileDistribution_tk()
+sample_list, weighted_list = tk.get_weighted_distribution("standard")
+# sample_list -> ["1p_household", "2p_household", "3p_household", "4p_household",
+#                  "workshop", "bakery", "restaurant", "store", "hair_dresser"]
+```
+
+---
+
 ## `ProfileDistribution_tk`
 
 The primary regional profile, based on publicly available statistics for the Treptow-Köpenick district of Berlin. All ratio attributes are derived from the district's 146,611 total entities (households plus all commercial categories), making every weight directly comparable and summing to approximately 1.
@@ -93,21 +128,22 @@ class ProfileDistribution_tk(ProfileDistribution_mask):
 An alternative Berlin city-wide profile. Uses aggregate figures for the entire city of Berlin rather than a single district, providing slightly different household ratios and significantly larger absolute commercial counts. Useful for sensitivity analysis or when modelling a large urban-scale deployment.
 
 ```python
-class ProfileDistribution_bln(ProfileDistribution_mask):
-    # Household ratios (percentage of all Berlin households)
-    ratio_1p = 50   # 50% one-person households
-    ratio_2p = 29   # 29% two-person households
-    ratio_3p = 10   # 10% three-person households
-    ratio_4p = 8    # 8%  four-person households
-    ratio_5p = 3    # 3%  five-or-more-person households
+class ProfileDistribution_bln():
+    def __init__(self):
+        # Household ratios (percentage of all Berlin households)
+        ratio_1p = 50   # 50% one-person households
+        ratio_2p = 29   # 29% two-person households
+        ratio_3p = 10   # 10% three-person households
+        ratio_4p = 8    # 8%  four-person households
+        ratio_5p = 3    # 3%  five-or-more-person households
 
-    # Commercial entity counts (Berlin-wide)
-    n_industry     = 752
-    n_workshops    = 7_167
-    n_bakery       = 210
-    n_hair_dresser = 1_799
-    n_store        = 19_200
-    n_restaurants  = 9_050
+        # Commercial entity counts (Berlin-wide)
+        n_industry     = 752
+        n_workshops    = 7_167
+        n_bakery       = 210
+        n_hair_dresser = 1_799
+        n_store        = 19_200
+        n_restaurants  = 9_050
 ```
 
 ---

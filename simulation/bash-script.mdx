@@ -1,7 +1,7 @@
 ---
-title: "Batch Simulation with the Shell Script"
+title: "deZent Batch Simulation via run_zanon_simu.sh Script"
 sidebarTitle: "Batch Script"
-description: "Use run_zanon_simu.sh to automate deZent simulations across all parameter combinations. Adapt paths and split across multiple scripts for parallel execution."
+description: "Automate all 480 deZent parameter combinations using run_zanon_simu.sh. Learn to adapt paths, make it executable, and split runs for parallel execution."
 ---
 
 Running all 480 parameter combinations from the deZent paper evaluation by hand would be impractical. The `scripts/run_zanon_simu.sh` script automates this by iterating over every combination of gateway count, maximum SM count, z-anonymity threshold, and random seed using nested loops, invoking `python3 main.py` once per combination.

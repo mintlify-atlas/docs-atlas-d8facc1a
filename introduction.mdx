@@ -1,7 +1,7 @@
 ---
 title: "deZent: Decentralized Z-Anonymity for Smart Metering"
 sidebarTitle: "Introduction"
-description: "deZent implements decentralized z-anonymity for smart meter networks using ring-topology gateway coordination and Counting Bloom Filters to protect energy consumption privacy."
+description: "Python simulation framework for decentralized z-anonymity in smart metering networks, using ring-topology gateway coordination and Counting Bloom Filters."
 ---
 
 deZent is a research simulation framework for privacy-preserving smart metering, published on [arXiv (2603.08854)](https://arxiv.org/abs/2603.08854). It demonstrates how z-anonymity — a technique that prevents re-identification by ensuring any published data point could originate from at least *z* distinct sources — can be achieved across a distributed network of gateways with minimal inter-node coordination, removing the need for a fully trusted central authority.
@@ -63,13 +63,13 @@ Every run of `main.py` executes all three scenarios back-to-back on the same vir
   <Card title="Quickstart" icon="rocket" href="/quickstart">
     Install dependencies, set up your environment, and run your first simulation in under five minutes.
   </Card>
-  <Card title="Concepts" icon="book-open" href="/concepts">
+  <Card title="Concepts" icon="book-open" href="/concepts/z-anonymity">
     Deep-dive into z-anonymity, Counting Bloom Filters, the ring-coordination protocol, and simulation parameters.
   </Card>
-  <Card title="Simulation" icon="play" href="/simulation">
+  <Card title="Simulation" icon="play" href="/simulation/configuration">
     Learn how to configure scenarios, interpret output files, run the Jha baseline, and validate results.
   </Card>
-  <Card title="Reference" icon="code" href="/reference">
+  <Card title="Reference" icon="code" href="/reference/zanon">
     Full API and CLI reference for `main.py`, `zanon.py`, network components, and data analysis scripts.
   </Card>
 </CardGroup>

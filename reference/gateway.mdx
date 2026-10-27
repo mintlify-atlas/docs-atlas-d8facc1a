@@ -1,7 +1,7 @@
 ---
 title: "Gateway: Measurement Collection and Anonymized Publication"
 sidebarTitle: "Gateway"
-description: "Reference for the Gateway class — manages smart meter connections, participates in ring coordination, collects measurements into Counting Bloom Filters, and publishes z-anonymous tuples."
+description: "Reference for the Gateway class, covering SM connections, ring-based CBF collection, coordinator noise, and tuple publication to the Central Entity."
 ---
 
 The `Gateway` class represents a single smart metering gateway node in the deZent network. Each gateway sits between one or more `SmartMeter` instances and the `CentralEntity`, acting as the primary data-collection point in all three simulation scenarios. In the decentralized scenario a gateway can serve as the round coordinator — adding noise to the Counting Bloom Filter, triggering ring traversal, and enforcing z-anonymity — while in every scenario it participates in measurement collection and, once z is satisfied, in publishing anonymized tuples to the CE. Gateways are linked into a sorted doubly-linked ring via their `gw_pred` and `gw_suc` references.
@@ -43,7 +43,7 @@ class Gateway:
 | `profile_type` | `str` | Consumer profile region; always `"tk"` (Treptow-Köpenick, Berlin). |
 | `l_sms` | `dict[int, SmartMeter]` | Dictionary mapping SM integer ID to its `SmartMeter` instance; populated by `connect_gw_to_sm`. |
 | `record_log` | `RecordLog` | Local record log holding hashed measurement keys and their associated `RecordLogEntry` objects within the current `delta_t` window. |
-| `coord_noise` | `int` | Random noise integer (20–30) added to the CBF by a coordinating gateway; retained so it can be subtracted after ring traversal. |
+| `coord_noise` | `int` | Noise integer used by a coordinating gateway; initialized to `0` and set to a random value in `[20, 30]` by `add_initial_noise_to_cnt_struct`. Retained so it can be subtracted after ring traversal. |
 | `gw_ce_msg_cnt` | `int` | Counter for messages sent from this gateway to the CE; reset to 0 each time `get_gw_ce_msg_cnt` is called. |
 
 ---

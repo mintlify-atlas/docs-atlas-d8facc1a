@@ -1,7 +1,7 @@
 ---
-title: "Three Anonymization Scenarios: deZent, Centralized, and Fully Decentralized"
+title: "Anonymization Scenarios: Ring-Based, Centralized, Per-GW"
 sidebarTitle: "Scenarios"
-description: "deZent runs three z-anonymity scenarios in one simulation: ring-coordinated deZent, centralized with a trusted CE, and fully decentralized with no inter-GW coordination."
+description: "deZent executes three z-anonymity scenarios on the same network: ring-coordinated deZent, a trusted-CE baseline, and fully decentralized per-GW isolation."
 ---
 
 A single `main.py` invocation runs **all three z-anonymity scenarios back-to-back**, sharing the same randomly generated network topology and using the same random seed throughout. Running the scenarios on identical network state makes results directly comparable: any difference in publication ratio or message overhead is attributable to the coordination strategy, not to network randomness. The simulation covers one full day (1,440 minutes = 96 measurement rounds) by default.

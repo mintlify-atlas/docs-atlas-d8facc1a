@@ -1,7 +1,7 @@
 ---
-title: "Simulation Configuration Parameters"
+title: "deZent Simulation Configuration Parameter Reference"
 sidebarTitle: "Configuration"
-description: "Configure deZent simulations with four command-line parameters: gateway count, max smart meters per gateway, z-anonymity threshold, and random seed."
+description: "Configure deZent simulations with four CLI arguments: gateway count, max smart meters per gateway, z-anonymity threshold, and random seed."
 ---
 
 deZent simulations are configured entirely through command-line arguments passed to `main.py`. Four parameters control the topology and privacy semantics of every run; all other simulation constants are fixed internally. Understanding both sets of values is important for reproducing the paper's results and for designing your own experiments.
@@ -86,7 +86,7 @@ The full evaluation in the arXiv paper sweeps the following parameter combinatio
 
 Each simulation run produces two CSV files per scenario (deZent ring-coordinated, centralized, and fully decentralized). The filenames are constructed from the run's parameters so that every output file is uniquely identifiable:
 
-```
+```text
 {scenario_prefix}_z_{z}_dt_{delta_t_seconds}_nGw_{n_gw}_distSm_normal_maxSm_{n_max_sm}_seed_{seed}.csv
 ```
 
@@ -99,7 +99,7 @@ The three scenario prefixes are:
 | `fully_decent_wo_coord_zanon` | Fully decentralized (each GW acts independently, no ring coordination) |
 
 **Example filename for the deZent scenario:**
-```
+```text
 decent_w_comm_zanon_z_5_dt_7260_nGw_25_distSm_normal_maxSm_20_seed_3.csv
 ```
 

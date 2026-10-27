@@ -1,7 +1,7 @@
 ---
-title: "Network Architecture: Gateways, Smart Meters, and the Central Entity"
+title: "Network Architecture: Ring, Gateways, and Smart Meters"
 sidebarTitle: "Network Architecture"
-description: "deZent models a ring of gateways each managing smart meters, connected to a central entity. Gateways exchange Counting Bloom Filters to coordinate anonymization without revealing raw data."
+description: "Ring-connected gateways manage smart meters and exchange CBFs to coordinate z-anonymity, ensuring the Central Entity only receives anonymized tuples."
 ---
 
 deZent simulates a realistic smart metering district: a set of **Smart Meters** reporting consumption data to their local **Gateways**, with the Gateways connected in a **ring topology** and all ultimately forwarding anonymized data to a single **Central Entity**. The ring structure is deZent's key innovation — it lets gateways pool their z-anonymity counts without ever sharing raw meter readings with one another or with the central entity.
@@ -69,6 +69,19 @@ class Gateway():
         self.record_log = RecordLog()
         self.coord_noise = 0
         self.gw_ce_msg_cnt = 0
+```
+
+After all GWs are created and arranged into a ring, `network.add_sms_to_gw()` calls `connect_gw_to_sm()` on each GW. That method instantiates `n_sm_conn` Smart Meter objects and stores them in `l_sms`, keyed by SM ID:
+
+```python
+# gateway.py
+def connect_gw_to_sm(self):
+    sm_distribution = ProfileDistribution()
+    sm_distribution.generate_sm_weighted_distribution(self.profile_type, self.gw_type)
+    for conn in range(self.n_sm_conn):
+        sm = SmartMeter(sm_distribution, sm_id=conn, gw_id=self.id)
+        if sm.id not in self.l_sms.keys():
+            self.l_sms[sm.id] = sm
 ```
 
 During each measurement round the GW:

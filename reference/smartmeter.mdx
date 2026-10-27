@@ -1,7 +1,7 @@
 ---
-title: "SmartMeter: Consumption Measurement Simulation"
+title: "SmartMeter: Electricity Consumption Measurement Simulation"
 sidebarTitle: "SmartMeter"
-description: "Reference for the SmartMeter class, which simulates electricity consumption measurements for residential and commercial entities using standard German load profiles."
+description: "Reference for SmartMeter, which models electricity consumption for households and businesses using German BDEW load profiles and consumer-type sampling."
 ---
 
 The `SmartMeter` class simulates a single electricity-consuming entity — a household, restaurant, bakery, or other commercial premises — and produces time-indexed consumption readings on demand. Each instance is assigned a consumer type drawn probabilistically from a `ProfileDistribution` at construction time, then loads the corresponding VDEW/BDEW Standard Load Profile (SLA) CSV file. When `measure_data` is called, it reads the normalized profile value for the current time slot, scales it to the entity's annual consumption, adds a small random noise component of up to 10% of the reading, and bins the result into a discretized hash key for privacy-preserving aggregation in the Counting Bloom Filter.
@@ -37,9 +37,7 @@ class SmartMeter:
 | `id` | `str` | Composite identifier `"{gw_id}-{sm_id}"`. |
 | `gw` | `int` | Parent gateway ID (the `gw_id` passed at construction). |
 | `type` | `str` | Consumer type string sampled from the profile distribution (e.g. `"1p_household"`, `"bakery"`). |
-| `type_class` | consumer type instance | One of the consumer type class instances (e.g. `household_1p()`) that carries `sla_file` and `scaling_sla`. |
-| `sla_file` | `str` | Filename of the SLA CSV (accessed via `type_class.sla_file`), relative to `../../data/consumption_data/`. |
-| `scaling_sla` | `float` | Multiplicative factor that converts the normalized SLA value (based on 1,000 kWh/year) to the entity's actual annual consumption. Accessed via `type_class.scaling_sla`. |
+| `type_class` | consumer type instance | One of the consumer type class instances (e.g. `household_1p()`) assigned by `choose_type_class_by_name`. Exposes `type_class.sla_file` (SLA CSV filename) and `type_class.scaling_sla` (annual consumption scaling factor). |
 | `data` | `pd.DataFrame` | SLA profile loaded at construction; indexed by `datetime.time` objects (15-minute slots), with columns `w_5`, `w_6`, `w_0-4`, `s_5`, `s_6`, `s_0-4`, `i_5`, `i_6`, `i_0-4` for winter/summer/interim × Saturday/Sunday/weekday. |
 
 ---
@@ -94,45 +92,53 @@ Each `SmartMeter` instance is assigned exactly one consumer type. The type deter
 Each consumer type is represented by a lightweight class in `profile_distribution.py` with three attributes: `consumption_p_a` (int, kWh/year), `scaling_sla` (float), and `sla_file` (str).
 
 ```python
-class household_1p:
-    consumption_p_a = 2105
-    scaling_sla     = 2.105
-    sla_file        = "SLA_h0_Haushalt.csv"
+class household_1p():
+    def __init__(self):
+        self.consumption_p_a = 2105
+        self.scaling_sla = self.consumption_p_a / 1000  # 2.105
+        self.sla_file = "SLA_h0_Haushalt.csv"
 
-class household_2p:
-    consumption_p_a = 3470
-    scaling_sla     = 3.470
-    sla_file        = "SLA_h0_Haushalt.csv"
+class household_2p():
+    def __init__(self):
+        self.consumption_p_a = 3470
+        self.scaling_sla = self.consumption_p_a / 1000  # 3.470
+        self.sla_file = "SLA_h0_Haushalt.csv"
 
-class household_3p_more:   # also used for 4p_household
-    consumption_p_a = 5047
-    scaling_sla     = 5.047
-    sla_file        = "SLA_h0_Haushalt.csv"
+class household_3p_more():   # also used for "4p_household"
+    def __init__(self):
+        self.consumption_p_a = 5047
+        self.scaling_sla = self.consumption_p_a / 1000  # 5.047
+        self.sla_file = "SLA_h0_Haushalt.csv"
 
-class bureau_workshop:
-    consumption_p_a = 6000
-    scaling_sla     = 6.0
-    sla_file        = "SLA_g1_bureaus_workshops.csv"
+class bureau_workshop():
+    def __init__(self):
+        self.consumption_p_a = 6000
+        self.scaling_sla = self.consumption_p_a / 1000  # 6.0
+        self.sla_file = "SLA_g1_bureaus_workshops.csv"
 
-class restaurant:
-    consumption_p_a = 20000
-    scaling_sla     = 20.0
-    sla_file        = "SLA_g2_restaurants.csv"
+class restaurant():
+    def __init__(self):
+        self.consumption_p_a = 20000
+        self.scaling_sla = self.consumption_p_a / 1000  # 20.0
+        self.sla_file = "SLA_g2_restaurants.csv"
 
-class store:
-    consumption_p_a = 17000
-    scaling_sla     = 17.0
-    sla_file        = "SLA_g4_store_hairdresser.csv"
+class store():
+    def __init__(self):
+        self.consumption_p_a = 17000
+        self.scaling_sla = self.consumption_p_a / 1000  # 17.0
+        self.sla_file = "SLA_g4_store_hairdresser.csv"
 
-class hair_dresser:
-    consumption_p_a = 7500
-    scaling_sla     = 7.5
-    sla_file        = "SLA_g4_store_hairdresser.csv"
+class hair_dresser():
+    def __init__(self):
+        self.consumption_p_a = 7500
+        self.scaling_sla = self.consumption_p_a / 1000  # 7.5
+        self.sla_file = "SLA_g4_store_hairdresser.csv"
 
-class bakery:
-    consumption_p_a = 25000
-    scaling_sla     = 25.0
-    sla_file        = "SLA_g5_bakery.csv"
+class bakery():
+    def __init__(self):
+        self.consumption_p_a = 25000
+        self.scaling_sla = self.consumption_p_a / 1000  # 25.0
+        self.sla_file = "SLA_g5_bakery.csv"
 ```
 
 ---

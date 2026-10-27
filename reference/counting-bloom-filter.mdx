@@ -1,7 +1,7 @@
 ---
-title: "CBloomFilter: Counting Bloom Filter for Privacy-Preserving Counting"
+title: "CBloomFilter: Counting Bloom Filter for Z-Anonymity"
 sidebarTitle: "CBloomFilter"
-description: "Reference for CBloomFilter — a Counting Bloom Filter implementation using MurmurHash3 that enables privacy-preserving aggregation of smart meter measurement hashes."
+description: "Reference for CBloomFilter, a MurmurHash3-backed counting Bloom filter that aggregates hashed smart meter readings and enforces z-anonymity thresholds."
 ---
 
 A Counting Bloom Filter (CBF) is a space-efficient probabilistic data structure that tracks how many times each item has been observed without storing the items themselves. Unlike a standard Bloom filter — which only supports membership queries — a CBF associates a small integer counter with each hash bucket, enabling both increment (`add`) and decrement (`remove`) operations. deZent uses a CBF to aggregate hashed smart meter measurement keys across multiple gateways during a collection round: every gateway adds its local measurements to the shared filter, the coordinating gateway subtracts the z threshold with `subtract_constant`, and any bucket that still has a positive count corresponds to a measurement value observed by at least z distinct meters — safe to publish anonymously.

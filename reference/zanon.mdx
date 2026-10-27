@@ -1,7 +1,7 @@
 ---
-title: "zAnon: Z-Anonymization Engine Reference"
+title: "zAnon: Decentralized Z-Anonymity Simulation Engine"
 sidebarTitle: "zAnon"
-description: "Complete reference for the zAnon class — the core simulation engine implementing decentralized, centralized, and fully decentralized z-anonymity scenarios."
+description: "Complete API reference for zAnon, the SimPy-based engine that runs decentralized, centralized, and fully decentralized z-anonymity simulation scenarios."
 ---
 
 The `zAnon` class is the central orchestration engine of deZent. It drives all three simulation scenarios — decentralized ring-based coordination (`decent_zanon_w_comm`), centralized CE-mediated collection (`central_zanon_w_cnt_struct`), and fully decentralized per-GW processing (`fully_decent_zanon_wo_coord`) — as SimPy generator processes. Each scenario ticks at a 15-minute measurement frequency, maintains a `delta_t` anonymization window over which historical records are retained, and enforces a z-anonymity threshold before any data is forwarded to the Central Entity for publication. Message counters (`msg_cnt_gwgw` and `msg_cnt_gw_ce`) record inter-component traffic for later analysis.

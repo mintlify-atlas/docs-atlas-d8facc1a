@@ -1,7 +1,7 @@
 ---
-title: "Running the Jha Centralized Z-Anonymity Baseline"
+title: "Jha Z-Anonymity Baseline: Run and Compare to deZent"
 sidebarTitle: "Jha Baseline"
-description: "Run the Jha et al. centralized z-anonymity baseline using deZent simulation log files to compare publication ratios against the ring-coordinated deZent scenario."
+description: "Run the Jha et al. centralized z-anonymity baseline using deZent simulation log files to compare publication ratios against the ring-coordinated scenario."
 ---
 
 The Jha baseline is a re-implementation of centralized z-anonymity from Jha et al. (DOI: [10.1109/BigData50022.2020.9378422](https://doi.org/10.1109/BigData50022.2020.9378422)), used in the deZent evaluation to validate that the ring-coordinated deZent scenario produces output quality comparable to a true centralized approach. By feeding the same raw measurement logs into both systems and comparing their publication ratios, the paper demonstrates that deZent achieves near-centralized anonymization quality with strictly less coordination.
@@ -14,7 +14,7 @@ The Jha baseline is a re-implementation of centralized z-anonymity from Jha et a
 
 The Jha simulation reads the **simulation log files** produced by the deZent run, not the anonymized output. These log files record every tuple that occurred during the simulation (including suppressed ones) and are written to `data/log_data/deZent/` with names following the pattern:
 
-```
+```text
 simu_log_cent_w_comm_zanon_z_{z}_dt_{delta_t_seconds}_nGw_{n_gw}_distSm_normal_maxSm_{n_max_sm}_seed_{seed}.csv
 ```
 

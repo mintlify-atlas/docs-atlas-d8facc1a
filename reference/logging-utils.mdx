@@ -1,7 +1,7 @@
 ---
 title: "logging_utils: Record and Publication Log Data Structures"
 sidebarTitle: "logging_utils"
-description: "Reference for logging_utils — the RecordLog, PubLog, SimuLog, and entry classes used to track smart meter measurements, publication status, and full simulation history."
+description: "Reference for logging_utils — RecordLog, PubLog, and SimuLog classes that track measurements, publication status, and full simulation history in deZent."
 ---
 
 `logging_utils.py` defines the in-memory data structures that all simulation components use to record, track, and publish measurements. Every gateway and the central entity maintain a `RecordLog` for the active anonymization window, the central entity accumulates a `PubLog` of all tuples it has published, and a `SimuLog` captures every measurement event across the entire simulation run for post-hoc analysis and evaluation.

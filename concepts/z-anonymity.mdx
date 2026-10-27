@@ -1,7 +1,7 @@
 ---
-title: "What Is Z-Anonymity in Smart Metering?"
+title: "Z-Anonymity: How deZent Protects Smart Meter Readings"
 sidebarTitle: "Z-Anonymity"
-description: "Z-anonymity prevents re-identification of smart meter readings by ensuring each published value was observed by at least z distinct individuals within a time window."
+description: "A smart meter value is only published in deZent when z distinct meters observed it within the delta_t window, preventing consumption fingerprinting."
 ---
 
 Smart meters report electricity consumption in 15-minute intervals — fine-grained enough to reveal when a household wakes up, leaves for work, returns home, or runs appliances. Left unprotected, that stream of measurements constitutes a detailed fingerprint of daily life. Z-anonymity is the privacy mechanism deZent uses to prevent re-identification: a measurement value is only forwarded to the public data stream if it was independently observed by at least **z distinct individuals** within a sliding time window.
@@ -55,7 +55,7 @@ class zAnon():
         self.n_cycles_for_anon = max(1, self.delta_t.seconds / self.measurement_frequency.seconds)
 ```
 
-`n_cycles_for_anon` tells the system how many 15-minute measurement rounds fit inside `delta_t` — for the default window this is `7260 / 900 = ~8.07`, rounded to **8 cycles**. This figure is used to size the Counting Bloom Filter so that it can hold all expected measurement hashes from the entire window.
+`n_cycles_for_anon` tells the system how many 15-minute measurement rounds fit inside `delta_t` — for the default window this is `7260 / 900 ≈ 8.07` (stored as a float, not rounded). This figure is used to size the Counting Bloom Filter so that it can hold all expected measurement hashes from the entire window.
 
 Eviction of stale records is performed by `apply_deltat_to_records` in `zanon_utils.py`:
 
